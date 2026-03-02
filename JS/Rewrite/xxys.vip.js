@@ -8,7 +8,7 @@
  * 
  * 
  * MITM = *.xxjjappss.com,*.xiaoxiaoapps.com,*.huaerdadi.com // *.xxjjappss.com,*.xjxjappss.com,*.huaerdadi.com
- * ^https:\/\/[a-z0-9]+\.(xxjjappss|xiaoxiaoapps|huaerdadi)\.com\/(ssp-svr\/ssp\/list3|vod\/reqplay|ucp\/index|getGlobalData) url script-response-body https://raw.githubusercontent.com/bv5204978/QXRelay/master/JS/Rewrite/xxys.vip.js
+ * ^https:\/\/[a-z0-9]+\.(xxjjappss|xiaoxiaoapps|huaerdadi)\.com\/(ssp-svr\/ssp\/list3|vod\/reqplay|ucp\/index|getGlobalData) url script-response-body https://raw.githubusercontent.com/hrimyr/QXRelay/master/JS/Rewrite/xxys.vip.js
  * 
  * 商店下载easyknowlege 
  */
@@ -58,7 +58,7 @@ let obj = JSON.parse($response.body);
 // index vip
 if ($request.url.indexOf(index) != -1) {
 	obj.data.user["isvip"] = "1";
-	obj.data.user["avatar_url"] = "https://raw.githubusercontent.com/bv5204978/QXRelay/master/Resource/jpg.jpg";
+	obj.data.user["avatar_url"] = "https://raw.githubusercontent.com/hrimyr/QXRelay/master/Resource/jpg.jpg";
 	obj.data.user["goldcoin"] = "233";
 
 	obj.data.uinfo["curr_group"] = "5"//obj.data.groups[obj.data.groups.length - 1];
@@ -89,12 +89,12 @@ if ($request.url.indexOf(global) != -1) {
 	obj.data.adgroups = {"global_adgroup_ad1": [{
 		"url": "",
 		"countdown": "0",
-		"pic": "https://raw.githubusercontent.com/bv5204978/QXRelay/master/Resource/jpg.jpg"
+		"pic": "https://raw.githubusercontent.com/hrimyr/QXRelay/master/Resource/jpg.jpg"
 	}]}
 	obj.data.iOS_adgroups = {"global_adgroup_ad1": [{
 		"url": "",
 		"countdown": "0",
-		"pic": "https://raw.githubusercontent.com/bv5204978/QXRelay/master/Resource/jpg.jpg"
+		"pic": "https://raw.githubusercontent.com/hrimyr/QXRelay/master/Resource/jpg.jpg"
 	}]}
 }
 

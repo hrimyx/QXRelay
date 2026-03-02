@@ -4,13 +4,13 @@
  * 
  * 
  * @fan 2023.5.3
- * https://github.com/bv5204978/QXRelay/blob/master/JS/CT/ah10000wx.ct.js
+ * https://github.com/hrimyr/QXRelay/blob/master/JS/CT/ah10000wx.ct.js
  * 
  * 
  * MITM = wx.ah.189.cn
- * https:\/\/wx\.ah\.189\.cn\/hd\/ahwxboot\/qdyl\/qd url script-request-body https://raw.githubusercontent.com/bv5204978/QXRelay/master/JS/CT/ah10000wx.ct.js
+ * https:\/\/wx\.ah\.189\.cn\/hd\/ahwxboot\/qdyl\/qd url script-request-body https://raw.githubusercontent.com/hrimyr/QXRelay/master/JS/CT/ah10000wx.ct.js
  * 
- * 5 0 * * * https://raw.githubusercontent.com/bv5204978/QXRelay/master/JS/CT/ah10000wx.ct.js, tag=安徽电信公众号.签到, img-url=https://raw.githubusercontent.com/Orz-3/mini/master/Alpha/10000.png, enabled=true
+ * 5 0 * * * https://raw.githubusercontent.com/hrimyr/QXRelay/master/JS/CT/ah10000wx.ct.js, tag=安徽电信公众号.签到, img-url=https://raw.githubusercontent.com/Orz-3/mini/master/Alpha/10000.png, enabled=true
  * 
  */
 

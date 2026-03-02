@@ -4,13 +4,13 @@
  * 
  * 
  * @fan 2023.5.3
- * https://github.com/bv5204978/QXRelay/blob/master/JS/CT/ah10000.ct.js
+ * https://github.com/hrimyr/QXRelay/blob/master/JS/CT/ah10000.ct.js
  * 
  * 
  * MITM = qy.ah.189.cn
- * ^https:\/\/qy\.ah\.189\.cn\/member\/qyMemberDay\/index\.html url script-request-header https://raw.githubusercontent.com/bv5204978/QXRelay/master/JS/CT/ah10000.ct.js
+ * ^https:\/\/qy\.ah\.189\.cn\/member\/qyMemberDay\/index\.html url script-request-header https://raw.githubusercontent.com/hrimyr/QXRelay/master/JS/CT/ah10000.ct.js
  * 
- * 5 0 * * * https://raw.githubusercontent.com/bv5204978/QXRelay/master/JS/CT/ah10000.ct.js, tag=安徽掌上10000, img-url=https://raw.githubusercontent.com/Orz-3/mini/master/Alpha/10000.png, enabled=true
+ * 5 0 * * * https://raw.githubusercontent.com/hrimyr/QXRelay/master/JS/CT/ah10000.ct.js, tag=安徽掌上10000, img-url=https://raw.githubusercontent.com/Orz-3/mini/master/Alpha/10000.png, enabled=true
  * 
  */
 

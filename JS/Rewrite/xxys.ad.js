@@ -5,7 +5,7 @@
  * 
  * 
  * MITM = *.xxjjappss.com
- * ^https:\/\/[a-zA-z0-9]+\.xxjjappss\.com\/getGlobalData url script-response-body https://raw.githubusercontent.com/bv5204978/QXRelay/master/JS/Rewrite/xxys.ad.js
+ * ^https:\/\/[a-zA-z0-9]+\.xxjjappss\.com\/getGlobalData url script-response-body https://raw.githubusercontent.com/hrimyr/QXRelay/master/JS/Rewrite/xxys.ad.js
  */
 
 
@@ -28,7 +28,7 @@ for (const key in body.data) {
                     dict["skip"] = "0"
                 }
                 if (dict.hasOwnProperty("pic")) {
-                    dict["pic"] = "https://raw.githubusercontent.com/bv5204978/QXRelay/master/Resource/jpg.jpg"
+                    dict["pic"] = "https://raw.githubusercontent.com/hrimyr/QXRelay/master/Resource/jpg.jpg"
                 }
             }
         }
@@ -60,12 +60,12 @@ img.ynkmjj.com
 ^https:\/\/img\.ynkmjj\.com\/[\S]+\.(gif|jpg) url reject-img
 
 *.xxjjappss.com
-^https:\/\/[a-zA-z0-9]+\.xxjjappss\.com\/getGlobalData url 302 https://raw.githubusercontent.com/bv5204978/QXRelay/master/Resource/mp4.mp4
+^https:\/\/[a-zA-z0-9]+\.xxjjappss\.com\/getGlobalData url 302 https://raw.githubusercontent.com/hrimyr/QXRelay/master/Resource/mp4.mp4
 
 
 
 
 
 7.29 历史
-^https://[a-z0-9]+\.39d83s\.com\/[\S]+\.mp4 url 302 https://raw.githubusercontent.com/bv5204978/QXRelay/master/Resource/mp4.mp4
+^https://[a-z0-9]+\.39d83s\.com\/[\S]+\.mp4 url 302 https://raw.githubusercontent.com/hrimyr/QXRelay/master/Resource/mp4.mp4
  */

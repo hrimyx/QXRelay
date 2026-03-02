@@ -3,13 +3,13 @@
  * APP 翼支付 左上角分省频道 签到有礼+每七日一宝箱(签到积分兑权益金 宝箱开权益金)活动截止到23.12.31
  * 
  * @fan 2023.4.30
- * https://github.com/bv5204978/QXRelay/blob/master/JS/CT/yzf.ct.js
+ * https://github.com/hrimyr/QXRelay/blob/master/JS/CT/yzf.ct.js
  * 
  * 
  * MITM = yzfhb.ah163.net
- * ^https:\/\/yzfhb\.ah163\.net\/yzfSign2023\/(yzfsignmessage\/generateCheckCode|yzfyearsign\/sign) url script-request-header https://raw.githubusercontent.com/bv5204978/QXRelay/master/JS/CT/yzf.ct.js
+ * ^https:\/\/yzfhb\.ah163\.net\/yzfSign2023\/(yzfsignmessage\/generateCheckCode|yzfyearsign\/sign) url script-request-header https://raw.githubusercontent.com/hrimyr/QXRelay/master/JS/CT/yzf.ct.js
  *
- * 5 0 * * * https://raw.githubusercontent.com/bv5204978/QXRelay/master/JS/CT/yzf.ct.js, tag=翼支付.签到, img-url=https://raw.githubusercontent.com/Orz-3/mini/master/Alpha/10000.png, enabled=true
+ * 5 0 * * * https://raw.githubusercontent.com/hrimyr/QXRelay/master/JS/CT/yzf.ct.js, tag=翼支付.签到, img-url=https://raw.githubusercontent.com/Orz-3/mini/master/Alpha/10000.png, enabled=true
  * 
  */
 

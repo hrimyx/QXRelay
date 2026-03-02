@@ -16,7 +16,7 @@ let gapDay = 35
 
 
 var url = {
-    url:"https://raw.githubusercontent.com/bv5204978/QXRelay/master/Api/holiday.json"
+    url:"https://raw.githubusercontent.com/hrimyr/QXRelay/master/Api/holiday.json"
 }
 
 $task.fetch(url).then(response => {
