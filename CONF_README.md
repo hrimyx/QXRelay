@@ -1,3 +1,5 @@
+# https://github.com/KOP-XIAO/QuantumultX/blob/master/QuantumultX_Profiles.conf
+
 # Quantumult X 示例配置文件 (Sample Quantumult Configuration)
 #
 # 以 ";" 或 "#" 或 "//" 开头的行为注释行，不会被程序执行。
