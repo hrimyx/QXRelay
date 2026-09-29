@@ -1,3 +1,5 @@
+// https://raw.githubusercontent.com/hrimyx/QXRelay/master/JS/Main/bwg.js#veid=xxx&key=xxx
+
 !(async function () {
     // ----- 参数解析（支持外部传参）-----
     const query = Object.fromEntries(
