@@ -1,4 +1,10 @@
-// https://raw.githubusercontent.com/hrimyx/QXRelay/master/JS/Main/bwg.js#veid=xxx&key=xxx
+/**
+ * @fileoverview 搬瓦工每日流量
+ * @supported Quantumult X (v1.5.6-build918+)
+ *
+ * https://raw.githubusercontent.com/hrimyx/QXRelay/master/JS/Main/bwg.js#veid=xxx&key=xxx
+ */
+
 
 !(async function () {
     // ----- 参数解析（支持外部传参）-----
