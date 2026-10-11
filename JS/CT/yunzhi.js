@@ -39,8 +39,8 @@ const CONFIG = {
 // Task 使用 QX 远程脚本 # 参数；Rewrite 阶段不依赖这些参数。
 const args = (typeof $environment !== "undefined" && $environment && $environment.variables) || {};
 
-// QX Rewrite 环境中存在 $request；Task 环境中不存在 $request。
-// 此脚本只将同一份代码分别配置为 script-response-body 和 Task。
+// QX 的 script-request-header 环境中存在 $request；Task 环境中不存在 $request。
+// 此脚本只将同一份代码分别配置为 script-request-header 和 Task。
 const IS_REWRITE = typeof $request !== "undefined";
 
 // 仅持久化 Task 无法自行重取的请求身份数据；所有状态共用一个 $prefs key。
@@ -746,8 +746,8 @@ function sleep(ms) {
 }
 
 // -------------------------- Rewrite 参数采集区 --------------------------
-// script-response-body 规则只匹配 /benefit/lobster/pool/byUser，从该请求头采集身份信息。
-// 仅持久化 Task 无法自行恢复的 Authorization 与 device_no；响应 Body 永远原样返回。
+// script-request-header 规则只匹配 /benefit/lobster/pool/byUser，从请求头采集身份信息。
+// 仅持久化 Task 无法自行恢复的 Authorization 与 device_no；本阶段不读取或修改响应体。
 function captureLog(message) {
     String(message || "").split(/\r?\n/).forEach(function (line) {
         console.log("📱 [参数采集] " + line);
@@ -836,21 +836,13 @@ function truncateForNotice(text, maxLength) {
     return s.slice(0, headLength) + "…[已省略，共" + s.length + "字符]…" + s.slice(-8);
 }
 
-function captureRewriteResponse() {
-    const response = (typeof $response !== "undefined" && $response) || null;
-    if (!response || typeof response.body !== "string") {
-        captureLog("未取得有效的 Response Body；本次不修改响应。");
-        $done();
-        return;
-    }
-
-    const originalBody = response.body;
+function captureRewriteRequestHeader() {
     let identity = null;
     try {
         identity = captureRequestIdentity();
         const request = (typeof $request !== "undefined" && $request) || {};
-        captureLog("Rewrite 已触发：" + String(request.method || "未知方法") + " " +
-            String(request.path || request.url || "未知路径") + "；HTTP " + String(response.statusCode || "未知状态"));
+        captureLog("Request Header Rewrite 已触发：" + String(request.method || "未知方法") + " " +
+            String(request.path || request.url || "未知路径"));
         // 完整捕获值写入 QX 日志；通知为避免过长，仅截断显示，不影响实际保存值。
         captureLog("Authorization：" + (identity.auth ? identity.auth : "[未捕获]"));
         captureLog("device_no：" + (identity.deviceNo ? identity.deviceNo : "[未捕获]"));
@@ -870,13 +862,13 @@ function captureRewriteResponse() {
     } catch (error) {
         captureLog("本次请求身份采集失败：" + String(error && error.message ? error.message : error));
     }
-    // Rewrite 只采集身份信息，不解析或缓存可在 Task 中实时获取的业务数据；响应 Body 原样返回。
-    $done({ body: originalBody });
+    // script-request-header 仅采集请求头，不修改请求；结束后交回原请求。
+    $done();
 }
 
 // -------------------------- Task 任务执行区 --------------------------
 if (IS_REWRITE) {
-    captureRewriteResponse();
+    captureRewriteRequestHeader();
 } else if (typeof $task === "undefined" || !$task || typeof $task.fetch !== "function") {
     $done();
 } else {
