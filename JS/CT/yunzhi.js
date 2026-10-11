@@ -5,7 +5,7 @@
  * 
  * 
  * yunzhi.new-gm.cn
- * ^https:\/\/yunzhi\.new-gm\.cn\/yunzhi\/api\/(?:benefit\/user\/list|benefit\/user\/benefit|content\/home-popups\/46\/claim)(?:\?.*)?$ url script-response-body https://raw.githubusercontent.com/hrimyx/QXRelay/master/JS/CT/yunzhi.js
+ * ^https:\/\/yunzhi\.new-gm\.cn\/yunzhi\/api\/benefit\/lobster\/pool\/byUser(?:\?.*)?$ url script-request-header https://raw.githubusercontent.com/hrimyx/QXRelay/master/JS/CT/yunzhi.js
  * 
  * 0 6 * * * https://raw.githubusercontent.com/hrimyx/QXRelay/master/JS/CT/yunzhi.js, tag=云智手机, img-url=https://raw.githubusercontent.com/hrimyx/QXRelay/master/Resource/yunzhi.png, enabled=true
  */
@@ -746,7 +746,7 @@ function sleep(ms) {
 }
 
 // -------------------------- Rewrite 参数采集区 --------------------------
-// 同一条 script-response-body 规则覆盖 user/list、user/benefit 和原始 home-popups/46/claim。
+// script-response-body 规则只匹配 /benefit/lobster/pool/byUser，从该请求头采集身份信息。
 // 仅持久化 Task 无法自行恢复的 Authorization 与 device_no；响应 Body 永远原样返回。
 function captureLog(message) {
     String(message || "").split(/\r?\n/).forEach(function (line) {
