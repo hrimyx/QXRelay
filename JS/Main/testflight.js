@@ -20,7 +20,7 @@
         let appkeysParam = args["appkey"];
 
         if (!appkeysParam) {
-            console.log("未检测到 appkey 参数，请在脚本配置路径后添加 #appkey=xxx+yyy");
+            console.log("🆃🅵未检测到 appkey 参数，请在脚本配置路径后添加 #appkey=xxx+yyy");
             return;
         }
 
@@ -28,7 +28,7 @@
         let keys = appkeysParam.split("+").map(k => k.trim()).filter(k => k.length > 0);
 
         if (keys.length === 0) {
-            console.log("未解析到有效的 appkey，请检查参数格式");
+            console.log("🆃🅵未解析到有效的 appkey，请检查参数格式");
             return;
         }
 
@@ -52,7 +52,7 @@
                 let response = await $task.fetch(request);
                 
                 if (!response || response.statusCode !== 200) {
-                    console.log(`TF监测 [${key}] 请求失败或状态码异常: ${response ? response.statusCode : "无响应"}`);
+                    console.log(`🆃🅵TF监测 [${key}] 请求失败或状态码异常: ${response ? response.statusCode : "无响应"}`);
                     continue;
                 }
 
@@ -71,12 +71,12 @@
                 let isClosed = /is not accepting any new testers/i.test(body);
 
                 if (isFull) {
-                    console.log(`TF监测 [${appName}] 无空位 (测试已满)`);
+                    console.log(`🆃🅵TF监测 [${appName}] 无空位 (测试已满)`);
                 } else if (isClosed) {
-                    console.log(`TF监测 [${appName}] 无空位 (未开放或已结束)`);
+                    console.log(`🆃🅵TF监测 [${appName}] 无空位 (未开放或已结束)`);
                 } else if (/To join the/i.test(body)) {
                     // 页面存在加入引导提示，判定为有空位
-                    console.log(`TF监测 [${appName}] 发现空位: ${url}`);
+                    console.log(`🆃🅵TF监测 [${appName}] 发现空位: ${url}`);
                     $notify(
                         "TestFlight 空位监测", 
                         `🎉 [${appName}] 有空位啦！`, 
@@ -84,17 +84,17 @@
                         {"open-url": url}
                     );
                 } else {
-                    console.log(`TF监测 [${appName}] 状态未知，请手动检查: ${url}`);
+                    console.log(`🆃🅵TF监测 [${appName}] 错误: ${body} 链接: ${url}`);
                 }
 
             } catch (fetchError) {
                 let errMsg = fetchError && fetchError.error ? fetchError.error : "Unknown error";
-                console.log(`TF监测 [${key}] 网络请求异常: ${errMsg}`);
+                console.log(`🆃🅵TF监测 [${key}] 网络请求异常: ${errMsg}`);
             }
         }
 
     } catch (error) {
-        console.log("TF监测脚本执行发生意外错误: " + String(error));
+        console.log("🆃🅵TF监测脚本执行发生意外错误: " + String(error));
     } finally {
         // 无论成功、失败还是异常，统一在此保证任务结束退出
         finish();
