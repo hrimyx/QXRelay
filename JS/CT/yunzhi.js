@@ -1,13 +1,12 @@
 /**
- * @fileoverview 云智手机
- * @supported Quantumult X (v1.5.6-build918+)
+ * @title 云智手机
+ * @desc 云智手机空间领取兑换
  *
+ * @Task 0 6 * * * https://raw.githubusercontent.com/hrimyx/QXRelay/master/JS/CT/yunzhi.js, tag=云智手机, img-url=https://raw.githubusercontent.com/hrimyx/QXRelay/master/Resource/yunzhi.png, enabled=true
+ * @param #pollCount=xxx&pollIntervalMs=yyy&notify=zzz
  * 
- * 
- * yunzhi.new-gm.cn
- * ^https:\/\/yunzhi\.new-gm\.cn\/yunzhi\/api\/benefit\/lobster\/pool\/byUser(?:\?.*)?$ url script-request-header https://raw.githubusercontent.com/hrimyx/QXRelay/master/JS/CT/yunzhi.js
- * 
- * 0 6 * * * https://raw.githubusercontent.com/hrimyx/QXRelay/master/JS/CT/yunzhi.js, tag=云智手机, img-url=https://raw.githubusercontent.com/hrimyx/QXRelay/master/Resource/yunzhi.png, enabled=true
+ * @Rewrite ^https:\/\/yunzhi\.new-gm\.cn\/yunzhi\/api\/benefit\/lobster\/pool\/byUser(?:\?.*)?$ url script-request-header https://raw.githubusercontent.com/hrimyx/QXRelay/master/JS/CT/yunzhi.js
+ * @mitm yunzhi.new-gm.cn
  */
 
 
@@ -43,84 +42,122 @@ const args = (typeof $environment !== "undefined" && $environment && $environmen
 // 此脚本只将同一份代码分别配置为 script-request-header 和 Task。
 const IS_REWRITE = typeof $request !== "undefined";
 
-// 仅持久化 Task 无法自行重取的请求身份数据；所有状态共用一个 $prefs key。
+// 多账号身份信息集中保存在一个带项目名前缀的 QX 持久化 Key 中。
+// v2 格式：{ version: 2, accounts: [{ id, auth, deviceNo }] }。
+// 读取时兼容旧版 { auth, deviceNo }，迁移后不会覆盖其他账号。
 const PREF_STATE_KEY = "YunzhiQX.State";
-const PREF_KEYS = {
-    auth: "auth",
-    deviceNo: "deviceNo"
-};
-
+const PREF_VERSION = 2;
+let activeAccount = null;
 let finished = false;
+
+function accountKey(auth) {
+    // 仅用不可逆摘要作为内部账号标识，不把完整令牌写入日志。
+    return md5Hex("YunzhiQX.Account:" + String(auth || "")).slice(0, 16);
+}
+
+function cleanAccount(item) {
+    if (!item || typeof item !== "object") return null;
+    const auth = String(item.auth || "").trim();
+    if (auth.length < 20 || auth.toLowerCase() === "null") return null;
+    const deviceNo = String(item.deviceNo || "").trim();
+    return {
+        id: accountKey(auth),
+        auth: auth,
+        deviceNo: deviceNo && deviceNo.toLowerCase() !== "null" ? deviceNo : ""
+    };
+}
 
 function readPrefState() {
     try {
-        if (typeof $prefs === "undefined" || !$prefs || typeof $prefs.valueForKey !== "function") return {};
+        if (typeof $prefs === "undefined" || !$prefs || typeof $prefs.valueForKey !== "function") {
+            return { version: PREF_VERSION, accounts: [] };
+        }
         const raw = $prefs.valueForKey(PREF_STATE_KEY);
-        if (raw === undefined || raw === null || raw === "") return {};
+        if (raw === undefined || raw === null || raw === "") {
+            return { version: PREF_VERSION, accounts: [] };
+        }
         const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
-        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            return { version: PREF_VERSION, accounts: [] };
+        }
 
-        // 兼容旧版本 JSON；只接受本脚本已知且类型简单的字段，忽略损坏/未知字段。
-        const state = {};
-        Object.keys(PREF_KEYS).forEach(function (field) {
-            const item = parsed[field];
-            if (typeof item === "string" || typeof item === "number" || typeof item === "boolean") {
-                state[field] = String(item);
+        let source = Array.isArray(parsed.accounts) ? parsed.accounts : [];
+        // 旧版本单账号数据迁移为 accounts 数组。
+        if (source.length === 0 && parsed.auth) {
+            source = [{ auth: parsed.auth, deviceNo: parsed.deviceNo || "" }];
+        }
+
+        const accounts = [];
+        source.forEach(function (item) {
+            const account = cleanAccount(item);
+            if (!account) return;
+            const existing = accounts.filter(function (entry) { return entry.id === account.id; })[0];
+            if (existing) {
+                if (account.deviceNo) existing.deviceNo = account.deviceNo;
+            } else {
+                accounts.push(account);
             }
         });
-        return state;
+        return { version: PREF_VERSION, accounts: accounts };
     } catch (error) {
-        return {};
+        return { version: PREF_VERSION, accounts: [] };
     }
 }
 
 function writePrefState(state) {
     try {
         if (typeof $prefs === "undefined" || !$prefs || typeof $prefs.setValueForKey !== "function") return false;
-        const clean = {};
-        Object.keys(PREF_KEYS).forEach(function (field) {
-            const item = state && state[field];
-            if (typeof item === "string" || typeof item === "number" || typeof item === "boolean") {
-                clean[field] = String(item);
+        const source = Array.isArray(state) ? state : (state && Array.isArray(state.accounts) ? state.accounts : []);
+        const accounts = [];
+        source.forEach(function (item) {
+            const account = cleanAccount(item);
+            if (!account) return;
+            const existing = accounts.filter(function (entry) { return entry.id === account.id; })[0];
+            if (existing) {
+                if (account.deviceNo) existing.deviceNo = account.deviceNo;
+            } else {
+                accounts.push(account);
             }
         });
-        if (Object.keys(clean).length === 0) {
-            if (typeof $prefs.removeValueForKey === "function") {
-                $prefs.removeValueForKey(PREF_STATE_KEY);
-                return true;
-            }
-            return $prefs.setValueForKey("{}", PREF_STATE_KEY) !== false;
-        }
-        return $prefs.setValueForKey(JSON.stringify(clean), PREF_STATE_KEY) !== false;
+        const payload = { version: PREF_VERSION, accounts: accounts };
+        return $prefs.setValueForKey(JSON.stringify(payload), PREF_STATE_KEY) !== false;
     } catch (error) {
         return false;
     }
 }
 
-function updatePrefState(updates, removals) {
+function listAccounts() {
+    return readPrefState().accounts;
+}
+
+function upsertAccount(auth, deviceNo) {
+    const normalizedAuth = String(auth || "").trim();
+    const normalizedDeviceNo = String(deviceNo || "").trim();
+    if (normalizedAuth.length < 20 || normalizedAuth.toLowerCase() === "null") return null;
+
     const state = readPrefState();
-    (Array.isArray(removals) ? removals : []).forEach(function (field) {
-        if (Object.prototype.hasOwnProperty.call(PREF_KEYS, field)) delete state[field];
-    });
-    Object.keys(updates || {}).forEach(function (field) {
-        if (!Object.prototype.hasOwnProperty.call(PREF_KEYS, field)) return;
-        const item = updates[field];
-        if (item === undefined || item === null || String(item) === "") {
-            delete state[field];
-        } else {
-            state[field] = String(item);
-        }
-    });
-    return writePrefState(state);
+    const id = accountKey(normalizedAuth);
+    let account = state.accounts.filter(function (item) { return item.id === id; })[0];
+    const isNew = !account;
+    if (!account) {
+        account = { id: id, auth: normalizedAuth, deviceNo: "" };
+        state.accounts.push(account);
+    }
+    // 只更新本账号的身份字段；缺少 device_no 的请求不抹掉之前捕获的值。
+    account.auth = normalizedAuth;
+    if (normalizedDeviceNo && normalizedDeviceNo.toLowerCase() !== "null") {
+        account.deviceNo = normalizedDeviceNo;
+    }
+    if (!writePrefState(state)) throw new Error("账号凭据写入 QX 持久化存储失败。");
+    return {
+        id: id,
+        auth: normalizedAuth,
+        deviceNo: account.deviceNo || normalizedDeviceNo,
+        authChanged: isNew,
+        deviceNoChanged: !!normalizedDeviceNo
+    };
 }
 
-function prefGet(field) {
-    if (!Object.prototype.hasOwnProperty.call(PREF_KEYS, field)) return "";
-    const value = readPrefState()[field];
-    return value === undefined || value === null ? "" : String(value);
-}
-
-// 清除旧版状态对象中的业务缓存字段；只保留 Task 无法自行恢复的请求身份信息。
 function migratePrefState() {
     try {
         if (typeof $prefs === "undefined" || !$prefs || typeof $prefs.valueForKey !== "function") return;
@@ -128,12 +165,11 @@ function migratePrefState() {
         if (!raw) return;
         const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
-        const legacyFields = Object.keys(parsed).some(function (field) {
-            return !Object.prototype.hasOwnProperty.call(PREF_KEYS, field);
-        });
-        if (legacyFields) writePrefState(readPrefState());
+        if (parsed.version !== PREF_VERSION || !Array.isArray(parsed.accounts)) {
+            writePrefState(readPrefState());
+        }
     } catch (error) {
-        // 损坏的旧状态会在下一次正常写入时被覆盖；这里不影响 Rewrite/Task 执行。
+        // 损坏的旧状态不阻断脚本；后续成功捕获账号时会写入规范格式。
     }
 }
 
@@ -149,7 +185,11 @@ function value(name) {
     }
 
     const capturedFields = ["auth", "deviceNo"];
-    if (capturedFields.indexOf(name) !== -1) return prefGet(PREF_KEYS[name]);
+    if (capturedFields.indexOf(name) !== -1) {
+        const account = activeAccount || listAccounts()[0] || {};
+        const captured = account[name];
+        return captured === undefined || captured === null ? "" : String(captured);
+    }
 
     const localValue = CONFIG[name];
     return localValue === undefined || localValue === null ? "" : String(localValue);
@@ -770,29 +810,23 @@ function captureRequestIdentity() {
     const requestDeviceNo = String(getHeaderIgnoreCase(requestHeaders, "device_no") || "").trim();
     const validAuth = requestAuth.length >= 20 && requestAuth.toLowerCase() !== "null";
     const validDeviceNo = requestDeviceNo !== "" && requestDeviceNo.toLowerCase() !== "null";
-    const previous = readPrefState();
-    const authChanged = validAuth && requestAuth !== String(previous.auth || "");
-    const deviceNoChanged = validDeviceNo && requestDeviceNo !== String(previous.deviceNo || "");
-    const updates = {};
-    const removals = [];
-
-    // 只持久化 Task 无法自行恢复的身份信息；账号切换时清除旧 deviceNo。
-    if (authChanged) {
-        updates.auth = requestAuth;
-        removals.push("deviceNo");
+    if (!validAuth) {
+        return {
+            id: "", auth: "", deviceNo: requestDeviceNo,
+            authValid: false, deviceNoValid: validDeviceNo,
+            authChanged: false, deviceNoChanged: false
+        };
     }
-    if (validDeviceNo && (authChanged || deviceNoChanged)) updates.deviceNo = requestDeviceNo;
-    if (Object.keys(updates).length || removals.length) updatePrefState(updates, removals);
 
-    return {
-        authChanged: authChanged,
-        deviceNoChanged: validDeviceNo && (authChanged || deviceNoChanged),
-        // 返回本次实际读到的值，即使值未变化，也用于采集日志。
-        auth: requestAuth,
-        deviceNo: requestDeviceNo,
-        authValid: validAuth,
-        deviceNoValid: validDeviceNo
-    };
+    const saved = listAccounts().filter(function (account) {
+        return account.id === accountKey(requestAuth);
+    })[0];
+    const identity = upsertAccount(requestAuth, validDeviceNo ? requestDeviceNo : "");
+    identity.authValid = true;
+    identity.deviceNoValid = validDeviceNo || !!identity.deviceNo;
+    identity.authChanged = !saved;
+    identity.deviceNoChanged = validDeviceNo && (!saved || saved.deviceNo !== requestDeviceNo);
+    return identity;
 }
 
 function isCloudBenefit(benefit) {
@@ -843,16 +877,17 @@ function captureRewriteRequestHeader() {
         const request = (typeof $request !== "undefined" && $request) || {};
         captureLog("Request Header Rewrite 已触发：" + String(request.method || "未知方法") + " " +
             String(request.path || request.url || "未知路径"));
-        // 完整捕获值写入 QX 日志；通知为避免过长，仅截断显示，不影响实际保存值。
-        captureLog("Authorization：" + (identity.auth ? identity.auth : "[未捕获]"));
-        captureLog("device_no：" + (identity.deviceNo ? identity.deviceNo : "[未捕获]"));
-        captureLog("Authorization 有效：" + String(identity.authValid) + "；device_no 有效：" + String(identity.deviceNoValid));
-        if (identity.authChanged) captureLog("检测到登录令牌变化，已更新当前账号凭据。");
-        if (identity.deviceNoChanged) captureLog("已更新当前请求的设备标识。");
+        // 不把完整登录令牌写入日志或通知；用摘要区分账号。
+        captureLog("账号标识：" + (identity.id || "[未识别]") + "；Authorization 有效：" + String(identity.authValid));
+        captureLog("device_no：" + (identity.deviceNo ? truncateForNotice(identity.deviceNo, 24) : "[未捕获]"));
+        captureLog("已保存账号数：" + String(listAccounts().length));
+        if (identity.authChanged) captureLog("已新增独立账号凭据。");
+        if (identity.deviceNoChanged) captureLog("已更新当前账号的设备标识。");
 
         if ((identity.authChanged || identity.deviceNoChanged) && notifyEnabled()) {
-            const notice = "Authorization：" + (identity.auth ? truncateForNotice(identity.auth, 56) : "[未捕获]") +
-                "\ndevice_no：" + (identity.deviceNo ? truncateForNotice(identity.deviceNo, 40) : "[未捕获]");
+            const notice = "账号标识：" + (identity.id || "[未识别]") +
+                "\ndevice_no：" + (identity.deviceNo ? truncateForNotice(identity.deviceNo, 24) : "[未捕获]") +
+                "\n已保存账号数：" + String(listAccounts().length);
             try {
                 $notify("云智手机 Rewrite 采集", "身份参数已读取", notice);
             } catch (notifyError) {
@@ -873,81 +908,115 @@ if (IS_REWRITE) {
     $done();
 } else {
 !(async function () {
-    let step = "参数校验";
-    let claimId = "";
-    let statusSummary = "发放状态未确认";
-    let expirySummary = "云机到期时间未返回";
-
     try {
-        requireFields(["auth", "deviceNo"]);
+        const accounts = listAccounts();
+        if (!accounts.length) {
+            finish("没有可用账号", "请先采集账号", "请在云智手机 App 中分别登录各账号，并访问用户权益/云机空间页面，确保匹配请求经过 Rewrite 规则。");
+            return;
+        }
+
         const pollCount = positiveInteger("pollCount", 3, 10);
         const pollIntervalMs = positiveInteger("pollIntervalMs", 1200, 10000);
-        log("开始执行：领取 → 兑换 → 查询发放状态 → 查询云机有效期");
+        const results = [];
+        log("检测到 " + accounts.length + " 个账号，开始按顺序执行。");
 
-        step = "第 1/4 步：领取权益";
-        const popupResult = await requestPopup();
-        log("1/4 领取权益：成功；" + popupResult.message);
+        for (let accountIndex = 0; accountIndex < accounts.length; accountIndex++) {
+            const account = accounts[accountIndex];
+            activeAccount = account;
+            let step = "参数校验";
+            let claimId = "";
+            let statusSummary = "发放状态未确认";
+            let expirySummary = "云机到期时间未返回";
+            const label = "账号 " + (accountIndex + 1) + "/" + accounts.length + " [" + account.id + "]";
 
-        step = "兑换前置查询：获取 userItemId";
-        const userItem = await requestUserItemId();
-        log("兑换前置查询：" + userItem.message);
-
-        step = "第 2/4 步：兑换权益";
-        const claimResult = await requestClaim(userItem.userItemId, userItem.resourceId);
-        claimId = String(claimResult.data && claimResult.data.claimId || "");
-        log("2/4 兑换权益：" + claimResult.message);
-        if (!/^\d+$/.test(claimId) || !Number.isSafeInteger(Number(claimId)) || Number(claimId) <= 0) {
-            throw new Error("兑换接口未返回有效 claimId，无法查询发放状态。");
-        }
-
-        step = "第 3/4 步：查询发放状态";
-        let statusResult = null;
-        let statusError = "";
-        for (let i = 0; i < pollCount; i++) {
             try {
-                statusResult = await requestStatus(claimId);
+                requireFields(["auth", "deviceNo"]);
+                log("开始处理 " + label + "：领取 → 兑换 → 查询发放状态 → 查询云机有效期");
+
+                step = "第 1/4 步：领取权益";
+                const popupResult = await requestPopup();
+                log(label + " 1/4 领取权益：成功；" + popupResult.message);
+
+                step = "兑换前置查询：获取 userItemId";
+                const userItem = await requestUserItemId();
+                log(label + " 兑换前置查询：" + userItem.message);
+
+                step = "第 2/4 步：兑换权益";
+                const claimResult = await requestClaim(userItem.userItemId, userItem.resourceId);
+                claimId = String(claimResult.data && claimResult.data.claimId || "");
+                log(label + " 2/4 兑换权益：" + claimResult.message);
+                if (!/^\d+$/.test(claimId) || !Number.isSafeInteger(Number(claimId)) || Number(claimId) <= 0) {
+                    throw new Error("兑换接口未返回有效 claimId，无法查询发放状态。");
+                }
+
+                step = "第 3/4 步：查询发放状态";
+                let statusResult = null;
+                let statusError = "";
+                for (let i = 0; i < pollCount; i++) {
+                    try {
+                        statusResult = await requestStatus(claimId);
+                    } catch (error) {
+                        statusError = String(error && error.message ? error.message : error);
+                        break;
+                    }
+                    const status = Number(statusResult.data && statusResult.data.status);
+                    if (status === 1 || status !== 0) break;
+                    if (i < pollCount - 1) await sleep(pollIntervalMs);
+                }
+
+                if (statusError) {
+                    statusSummary = "发放状态查询失败";
+                    log(label + " 3/4 发放状态：查询失败；" + statusError);
+                } else if (statusResult) {
+                    const status = Number(statusResult.data && statusResult.data.status);
+                    statusSummary = status === 1 ? "发放成功" : (status === 0 ? "发放仍在处理中" : "发放状态未知");
+                    log(label + " 3/4 发放状态：" + statusResult.message + (status === 0 ? "；轮询次数=" + pollCount : ""));
+                } else {
+                    statusSummary = "未获得发放状态";
+                    log(label + " 3/4 发放状态：未获得查询结果");
+                }
+
+                step = "第 4/4 步：查询云机空间最新有效期";
+                const benefitResult = await requestBenefit(userItem.benefitConfigId);
+                log(label + " 4/4 云机空间有效期：" + benefitResult.message);
+
+                const devices = Array.isArray(benefitResult.data && benefitResult.data.cloudDevices)
+                    ? benefitResult.data.cloudDevices : [];
+                const expiries = devices.map(function (device) {
+                    return device && device.expireTime ? String(device.expireTime) : "";
+                }).filter(Boolean);
+                if (expiries.length) expirySummary = "云机到期：" + expiries.join("、");
+
+                const ok = !statusError && statusResult && Number(statusResult.data && statusResult.data.status) === 1;
+                results.push({
+                    ok: !!ok,
+                    label: label,
+                    message: "兑换已提交（claimId=" + claimId + "）｜" + statusSummary + "｜" + expirySummary +
+                        (statusError ? "｜状态查询错误：" + statusError : "")
+                });
+                log(label + " 流程结束：" + (ok ? "成功" : "已执行，但发放状态未确认成功"));
             } catch (error) {
-                statusError = String(error && error.message ? error.message : error);
-                break;
+                const errorMessage = String(error && error.message ? error.message : error);
+                log(label + " 流程中断：" + step + "；原因=" + errorMessage);
+                results.push({ ok: false, label: label, message: "失败步骤：" + step + "；" + errorMessage.slice(0, 220) });
+                // 一个账号失败只记录结果，继续下一个账号。
             }
-            const status = Number(statusResult.data && statusResult.data.status);
-            if (status === 1 || status !== 0) break;
-            if (i < pollCount - 1) await sleep(pollIntervalMs);
         }
 
-        if (statusError) {
-            statusSummary = "发放状态查询失败";
-            log("3/4 发放状态：查询失败；" + statusError);
-        } else if (statusResult) {
-            const status = Number(statusResult.data && statusResult.data.status);
-            statusSummary = status === 1 ? "发放成功" : (status === 0 ? "发放仍在处理中" : "发放状态未知");
-            log("3/4 发放状态：" + statusResult.message + (status === 0 ? "；轮询次数=" + pollCount : ""));
-        } else {
-            statusSummary = "未获得发放状态";
-            log("3/4 发放状态：未获得查询结果");
-        }
-
-        // 无论状态查询是否成功，都继续尝试获取云机当前有效期。
-        step = "第 4/4 步：查询云机空间最新有效期";
-        const benefitResult = await requestBenefit(userItem.benefitConfigId);
-        log("4/4 云机空间有效期：" + benefitResult.message);
-
-        const devices = Array.isArray(benefitResult.data && benefitResult.data.cloudDevices)
-            ? benefitResult.data.cloudDevices
-            : [];
-        const expiries = devices.map(function (device) {
-            return device && device.expireTime ? String(device.expireTime) : "";
-        }).filter(Boolean);
-        if (expiries.length) expirySummary = "云机到期：" + expiries.join("、");
-
-        const notificationMessage = ["领取成功", "兑换已提交（claimId=" + claimId + "）", statusSummary, expirySummary].join("｜");
-        const notificationSubtitle = statusError ? "流程完成，状态查询异常" :
-            (statusResult && Number(statusResult.data && statusResult.data.status) === 1 ? "权益发放成功" : "流程执行完成");
-        finish("四步流程执行完成", notificationSubtitle, notificationMessage);
+        activeAccount = null;
+        const successCount = results.filter(function (item) { return item.ok; }).length;
+        const failCount = results.length - successCount;
+        const detail = results.map(function (item) {
+            return (item.ok ? "✅ " : "⚠️ ") + item.label + "：" + item.message;
+        }).join("\n");
+        const title = failCount === 0 ? "多账号执行完成" : (successCount ? "多账号部分完成" : "多账号执行失败");
+        const subtitle = "成功 " + successCount + " 个，未确认成功 " + failCount + " 个，共 " + results.length + " 个账号";
+        finish(title, subtitle, detail.slice(0, 1800));
     } catch (error) {
+        activeAccount = null;
         const errorMessage = String(error && error.message ? error.message : error);
-        log("流程中断：" + step + "；原因=" + errorMessage);
-        finish("流程未完成", "失败步骤：" + step, errorMessage.slice(0, 180));
+        log("任务初始化失败：" + errorMessage);
+        finish("任务初始化失败", "参数或持久化数据异常", errorMessage.slice(0, 220));
     }
 })();
 }
