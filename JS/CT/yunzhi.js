@@ -10,6 +10,7 @@
  */
 
 
+
 const CONFIG = {
     // 可由 Task URL 覆盖的运行参数
     pollCount: "3",          // 状态查询最多次数（1-10）
@@ -43,15 +44,96 @@ const args = (typeof $environment !== "undefined" && $environment && $environmen
 const IS_REWRITE = typeof $request !== "undefined";
 
 // 多账号身份信息集中保存在一个带项目名前缀的 QX 持久化 Key 中。
-// v2 格式：{ version: 2, accounts: [{ id, auth, deviceNo }] }。
+// v2 格式：{ version: 2, accounts: [{ id, auth, phone, deviceNo }] }。
+// 手机号登录的账号以手机号作为 id（账号唯一标识），token 刷新/重新登录不会产生重复账号；
+// 非手机号登录仍沿用 token 摘要作为 id（历史格式，保持不变）。
 // 读取时兼容旧版 { auth, deviceNo }，迁移后不会覆盖其他账号。
 const PREF_STATE_KEY = "YunzhiQX.State";
 const PREF_VERSION = 2;
 let activeAccount = null;
 let finished = false;
 
-function accountKey(auth) {
-    // 仅用不可逆摘要作为内部账号标识，不把完整令牌写入日志。
+function normalizePhone(value) {
+    // 仅接受 11 位中国大陆手机号；兼容 +86/86 前缀与常见分隔符。
+    let text = String(value === undefined || value === null ? "" : value).trim().replace(/[\s\-()]/g, "");
+    if (/^\+?86(1[3-9]\d{9})$/.test(text)) text = text.replace(/^\+?86/, "");
+    return /^1[3-9]\d{9}$/.test(text) ? text : "";
+}
+
+function base64UrlToBytes(input) {
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const text = String(input || "").replace(/=+$/, "");
+    const out = [];
+    let buffer = 0, bits = 0;
+    for (let i = 0; i < text.length; i++) {
+        const index = alphabet.indexOf(text.charAt(i));
+        if (index < 0) throw new Error("base64url 字符非法");
+        buffer = (buffer << 6) | index;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out.push((buffer >>> bits) & 255);
+        }
+    }
+    return out;
+}
+
+function extractPhoneFromJwt(auth) {
+    // 尝试从 JWT 载荷中解析手机号：优先匹配已知字段，再全文扫描 11 位号码。
+    // 非 JWT 或解析失败时返回空字符串，由调用方回退到原有 token 摘要逻辑。
+    try {
+        const parts = String(auth || "").trim().split(".");
+        if (parts.length !== 3 || !parts[1]) return "";
+        const bytes = base64UrlToBytes(parts[1]);
+        if (!bytes.length) return "";
+        // 载荷按 Latin-1 还原为文本即可做结构解析与数字扫描（手机号为纯 ASCII）。
+        let text = "";
+        for (let i = 0; i < bytes.length; i++) text += String.fromCharCode(bytes[i] & 255);
+        let payload = null;
+        try { payload = JSON.parse(text); } catch (parseError) { payload = null; }
+        if (payload && typeof payload === "object") {
+            const fields = ["mobile", "phone", "mobileNo", "phoneNo", "telephone", "tel",
+                "userMobile", "phoneNumber", "username", "sub"];
+            for (let i = 0; i < fields.length; i++) {
+                const phone = normalizePhone(payload[fields[i]]);
+                if (phone) return phone;
+            }
+        }
+        // 要求号码前后为非数字边界，避免把 13 位毫秒时间戳等长数字串误判。
+        const matched = /(?:^|[^\d])(1[3-9]\d{9})(?:[^\d]|$)/.exec(text);
+        return matched ? matched[1] : "";
+    } catch (error) {
+        return "";
+    }
+}
+
+function extractPhoneFromUrl(url) {
+    // script-request-header 只能读取请求行与请求头；若 byUser 请求的 query 携带手机号则直接采用。
+    try {
+        const text = String(url || "");
+        const queryIndex = text.indexOf("?");
+        if (queryIndex < 0) return "";
+        const pairs = text.slice(queryIndex + 1).split("&");
+        for (let i = 0; i < pairs.length; i++) {
+            const eqIndex = pairs[i].indexOf("=");
+            const rawValue = eqIndex < 0 ? "" : pairs[i].slice(eqIndex + 1);
+            let decoded = rawValue;
+            try { decoded = decodeURIComponent(rawValue.replace(/\+/g, " ")); } catch (decodeError) { decoded = rawValue; }
+            const phone = normalizePhone(decoded);
+            if (phone) return phone;
+        }
+        return "";
+    } catch (error) {
+        return "";
+    }
+}
+
+function accountKey(auth, phone) {
+    // 手机号登录：以手机号作为账号唯一标识，token 刷新/重新登录不会产生重复账号。
+    // phone 为空时尝试从 JWT 载荷解析；都取不到则回退到 token 摘要。
+    const mobile = normalizePhone(phone) || extractPhoneFromJwt(auth);
+    if (mobile) return mobile;
+    // 非手机号登录：沿用不可逆 token 摘要作为内部账号标识，不把完整令牌写入日志（历史格式，保持不变）。
     return md5Hex("YunzhiQX.Account:" + String(auth || "")).slice(0, 16);
 }
 
@@ -59,10 +141,15 @@ function cleanAccount(item) {
     if (!item || typeof item !== "object") return null;
     const auth = String(item.auth || "").trim();
     if (auth.length < 20 || auth.toLowerCase() === "null") return null;
+    // 历史 token-keyed 记录：若能从 token 解析出手机号，升级为手机号 key，
+    // 使同一用户在 token 刷新后不再出现重复账号。
+    const phone = normalizePhone(item.phone) || normalizePhone(item.id) || extractPhoneFromJwt(auth);
     const deviceNo = String(item.deviceNo || "").trim();
+    const storedId = String(item.id || "").trim();
     return {
-        id: accountKey(auth),
+        id: phone || storedId || accountKey(auth, ""),
         auth: auth,
+        phone: phone,
         deviceNo: deviceNo && deviceNo.toLowerCase() !== "null" ? deviceNo : ""
     };
 }
@@ -93,6 +180,9 @@ function readPrefState() {
             if (!account) return;
             const existing = accounts.filter(function (entry) { return entry.id === account.id; })[0];
             if (existing) {
+                // 同一账号的历史重复条目合并时，采用后出现的（更新）凭据。
+                existing.auth = account.auth;
+                if (account.phone) existing.phone = account.phone;
                 if (account.deviceNo) existing.deviceNo = account.deviceNo;
             } else {
                 accounts.push(account);
@@ -114,6 +204,9 @@ function writePrefState(state) {
             if (!account) return;
             const existing = accounts.filter(function (entry) { return entry.id === account.id; })[0];
             if (existing) {
+                // 同一账号的历史重复条目合并时，采用后出现的（更新）凭据。
+                existing.auth = account.auth;
+                if (account.phone) existing.phone = account.phone;
                 if (account.deviceNo) existing.deviceNo = account.deviceNo;
             } else {
                 accounts.push(account);
@@ -130,21 +223,25 @@ function listAccounts() {
     return readPrefState().accounts;
 }
 
-function upsertAccount(auth, deviceNo) {
+function upsertAccount(auth, deviceNo, phone) {
     const normalizedAuth = String(auth || "").trim();
     const normalizedDeviceNo = String(deviceNo || "").trim();
     if (normalizedAuth.length < 20 || normalizedAuth.toLowerCase() === "null") return null;
 
+    // 手机号登录优先用手机号定位账号；URL 未携带时再从 JWT 载荷解析（兜底）。
+    const mobile = normalizePhone(phone) || extractPhoneFromJwt(normalizedAuth);
     const state = readPrefState();
-    const id = accountKey(normalizedAuth);
+    const id = accountKey(normalizedAuth, mobile);
     let account = state.accounts.filter(function (item) { return item.id === id; })[0];
     const isNew = !account;
     if (!account) {
-        account = { id: id, auth: normalizedAuth, deviceNo: "" };
+        account = { id: id, auth: "", phone: "", deviceNo: "" };
         state.accounts.push(account);
     }
     // 只更新本账号的身份字段；缺少 device_no 的请求不抹掉之前捕获的值。
+    account.id = id;
     account.auth = normalizedAuth;
+    if (mobile) account.phone = mobile;
     if (normalizedDeviceNo && normalizedDeviceNo.toLowerCase() !== "null") {
         account.deviceNo = normalizedDeviceNo;
     }
@@ -804,10 +901,13 @@ function getHeaderIgnoreCase(headers, name) {
 }
 
 function captureRequestIdentity() {
-    const requestHeaders = (typeof $request !== "undefined" && $request && $request.headers) || {};
+    const currentRequest = (typeof $request !== "undefined" && $request) || {};
+    const requestHeaders = currentRequest.headers || {};
     const requestAuth = String(getHeaderIgnoreCase(requestHeaders, "authorization") || "")
         .replace(/^Bearer\s+/i, "").trim();
     const requestDeviceNo = String(getHeaderIgnoreCase(requestHeaders, "device_no") || "").trim();
+    // 手机号登录：优先从请求 URL 参数取手机号；取不到时 upsert 内再从 JWT 载荷解析（兜底）。
+    const requestPhone = extractPhoneFromUrl(currentRequest.url || currentRequest.path || "");
     const validAuth = requestAuth.length >= 20 && requestAuth.toLowerCase() !== "null";
     const validDeviceNo = requestDeviceNo !== "" && requestDeviceNo.toLowerCase() !== "null";
     if (!validAuth) {
@@ -818,10 +918,12 @@ function captureRequestIdentity() {
         };
     }
 
+    // accountKey 内部已统一手机号口径（URL 参数 → JWT 载荷 → token 摘要），
+    // token 刷新不会再被误判为新增账号。
     const saved = listAccounts().filter(function (account) {
-        return account.id === accountKey(requestAuth);
+        return account.id === accountKey(requestAuth, requestPhone);
     })[0];
-    const identity = upsertAccount(requestAuth, validDeviceNo ? requestDeviceNo : "");
+    const identity = upsertAccount(requestAuth, validDeviceNo ? requestDeviceNo : "", requestPhone);
     identity.authValid = true;
     identity.deviceNoValid = validDeviceNo || !!identity.deviceNo;
     identity.authChanged = !saved;
@@ -885,11 +987,14 @@ function captureRewriteRequestHeader() {
         if (identity.deviceNoChanged) captureLog("已更新当前账号的设备标识。");
 
         if ((identity.authChanged || identity.deviceNoChanged) && notifyEnabled()) {
-            const notice = "账号标识：" + (identity.id || "[未识别]") +
-                "\ndevice_no：" + (identity.deviceNo ? truncateForNotice(identity.deviceNo, 24) : "[未捕获]") +
-                "\n已保存账号数：" + String(listAccounts().length);
+            // 副标题：新账号为"{手机号} 参数获取"，已存在账号信息变更为"{手机号} 参数更新"。
+            // auth 做截断显示，避免完整令牌出现在锁屏通知中；device_no 沿用原有截断。
+            const action = identity.authChanged ? "获取" : "更新";
+            const notice = "auth: " + truncateForNotice(identity.auth, 48) +
+                "\ndevice_no: " + (identity.deviceNo ? truncateForNotice(identity.deviceNo, 24) : "[未捕获]") +
+                "\n已记录账号: " + listAccounts().map(function (account) { return account.id; }).join(",");
             try {
-                $notify("云智手机 Rewrite 采集", "身份参数已读取", notice);
+                $notify("云智手机", (identity.id || "[未识别]") + " 参数" + action, notice);
             } catch (notifyError) {
                 captureLog("采集通知发送失败：" + String(notifyError));
             }
