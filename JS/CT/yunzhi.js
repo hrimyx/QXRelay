@@ -10,7 +10,6 @@
  */
 
 
-
 const CONFIG = {
     // 可由 Task URL 覆盖的运行参数
     pollCount: "3",          // 状态查询最多次数（1-10）
@@ -44,21 +43,12 @@ const args = (typeof $environment !== "undefined" && $environment && $environmen
 const IS_REWRITE = typeof $request !== "undefined";
 
 // 多账号身份信息集中保存在一个带项目名前缀的 QX 持久化 Key 中。
-// v2 格式：{ version: 2, accounts: [{ id, auth, phone, deviceNo }] }。
-// 手机号登录的账号以手机号作为 id（账号唯一标识），token 刷新/重新登录不会产生重复账号；
-// 非手机号登录仍沿用 token 摘要作为 id（历史格式，保持不变）。
+// v2 格式：{ version: 2, accounts: [{ id, auth, deviceNo }] }，其中 id 统一为 JWT 中的稳定 userId（形如 "uid:1540939"）。
 // 读取时兼容旧版 { auth, deviceNo }，迁移后不会覆盖其他账号。
 const PREF_STATE_KEY = "YunzhiQX.State";
 const PREF_VERSION = 2;
 let activeAccount = null;
 let finished = false;
-
-function normalizePhone(value) {
-    // 仅接受 11 位中国大陆手机号；兼容 +86/86 前缀与常见分隔符。
-    let text = String(value === undefined || value === null ? "" : value).trim().replace(/[\s\-()]/g, "");
-    if (/^\+?86(1[3-9]\d{9})$/.test(text)) text = text.replace(/^\+?86/, "");
-    return /^1[3-9]\d{9}$/.test(text) ? text : "";
-}
 
 function base64UrlToBytes(input) {
     const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
@@ -78,78 +68,57 @@ function base64UrlToBytes(input) {
     return out;
 }
 
-function extractPhoneFromJwt(auth) {
-    // 尝试从 JWT 载荷中解析手机号：优先匹配已知字段，再全文扫描 11 位号码。
-    // 非 JWT 或解析失败时返回空字符串，由调用方回退到原有 token 摘要逻辑。
+function decodeJwtPayloadText(auth) {
+    // 解出 JWT 中间段的载荷文本；非 JWT 或解码失败返回空字符串。
     try {
         const parts = String(auth || "").trim().split(".");
         if (parts.length !== 3 || !parts[1]) return "";
         const bytes = base64UrlToBytes(parts[1]);
         if (!bytes.length) return "";
-        // 载荷按 Latin-1 还原为文本即可做结构解析与数字扫描（手机号为纯 ASCII）。
+        // 载荷按 Latin-1 还原为文本即可做结构解析与数字扫描（标识字段为纯 ASCII）。
         let text = "";
         for (let i = 0; i < bytes.length; i++) text += String.fromCharCode(bytes[i] & 255);
-        let payload = null;
-        try { payload = JSON.parse(text); } catch (parseError) { payload = null; }
-        if (payload && typeof payload === "object") {
-            const fields = ["mobile", "phone", "mobileNo", "phoneNo", "telephone", "tel",
-                "userMobile", "phoneNumber", "username", "sub"];
-            for (let i = 0; i < fields.length; i++) {
-                const phone = normalizePhone(payload[fields[i]]);
-                if (phone) return phone;
-            }
-        }
-        // 要求号码前后为非数字边界，避免把 13 位毫秒时间戳等长数字串误判。
-        const matched = /(?:^|[^\d])(1[3-9]\d{9})(?:[^\d]|$)/.exec(text);
-        return matched ? matched[1] : "";
+        return text;
     } catch (error) {
         return "";
     }
 }
 
-function extractPhoneFromUrl(url) {
-    // script-request-header 只能读取请求行与请求头；若 byUser 请求的 query 携带手机号则直接采用。
-    try {
-        const text = String(url || "");
-        const queryIndex = text.indexOf("?");
-        if (queryIndex < 0) return "";
-        const pairs = text.slice(queryIndex + 1).split("&");
-        for (let i = 0; i < pairs.length; i++) {
-            const eqIndex = pairs[i].indexOf("=");
-            const rawValue = eqIndex < 0 ? "" : pairs[i].slice(eqIndex + 1);
-            let decoded = rawValue;
-            try { decoded = decodeURIComponent(rawValue.replace(/\+/g, " ")); } catch (decodeError) { decoded = rawValue; }
-            const phone = normalizePhone(decoded);
-            if (phone) return phone;
-        }
-        return "";
-    } catch (error) {
-        return "";
+function extractUserIdFromJwt(auth) {
+    // JWT 载荷中的 userId/sub 是用户的稳定标识，token 刷新后不变。
+    // 实测 byUser 请求的载荷为 {"clientType":"h5","userId":1540939,"sub":"1540939",...}，不含手机号。
+    const text = decodeJwtPayloadText(auth);
+    if (!text) return "";
+    let payload = null;
+    try { payload = JSON.parse(text); } catch (parseError) { payload = null; }
+    if (!payload || typeof payload !== "object") return "";
+    const fields = ["userId", "sub", "user_id", "uid", "userOid", "id"];
+    for (let i = 0; i < fields.length; i++) {
+        const value = payload[fields[i]];
+        const str = String(value === undefined || value === null ? "" : value).trim();
+        if (/^\d{1,20}$/.test(str) && str !== "0") return str;
     }
+    return "";
 }
 
-function accountKey(auth, phone) {
-    // 手机号登录：以手机号作为账号唯一标识，token 刷新/重新登录不会产生重复账号。
-    // phone 为空时尝试从 JWT 载荷解析；都取不到则回退到 token 摘要。
-    const mobile = normalizePhone(phone) || extractPhoneFromJwt(auth);
-    if (mobile) return mobile;
-    // 非手机号登录：沿用不可逆 token 摘要作为内部账号标识，不把完整令牌写入日志（历史格式，保持不变）。
-    return md5Hex("YunzhiQX.Account:" + String(auth || "")).slice(0, 16);
+function accountKey(auth) {
+    // 统一以 JWT 载荷中的稳定 userId 作为账号唯一标识（形如 "uid:1540939"）；
+    // token 刷新后 userId 不变，不会产生重复账号。无法解析时返回空字符串。
+    const userId = extractUserIdFromJwt(auth);
+    return userId ? "uid:" + userId : "";
 }
 
 function cleanAccount(item) {
     if (!item || typeof item !== "object") return null;
     const auth = String(item.auth || "").trim();
     if (auth.length < 20 || auth.toLowerCase() === "null") return null;
-    // 历史 token-keyed 记录：若能从 token 解析出手机号，升级为手机号 key，
-    // 使同一用户在 token 刷新后不再出现重复账号。
-    const phone = normalizePhone(item.phone) || normalizePhone(item.id) || extractPhoneFromJwt(auth);
+    // 账号 id 统一从 token 的 userId 派生；无法解析的记录视为无效。
+    const id = accountKey(auth);
+    if (!id) return null;
     const deviceNo = String(item.deviceNo || "").trim();
-    const storedId = String(item.id || "").trim();
     return {
-        id: phone || storedId || accountKey(auth, ""),
+        id: id,
         auth: auth,
-        phone: phone,
         deviceNo: deviceNo && deviceNo.toLowerCase() !== "null" ? deviceNo : ""
     };
 }
@@ -182,7 +151,6 @@ function readPrefState() {
             if (existing) {
                 // 同一账号的历史重复条目合并时，采用后出现的（更新）凭据。
                 existing.auth = account.auth;
-                if (account.phone) existing.phone = account.phone;
                 if (account.deviceNo) existing.deviceNo = account.deviceNo;
             } else {
                 accounts.push(account);
@@ -206,7 +174,6 @@ function writePrefState(state) {
             if (existing) {
                 // 同一账号的历史重复条目合并时，采用后出现的（更新）凭据。
                 existing.auth = account.auth;
-                if (account.phone) existing.phone = account.phone;
                 if (account.deviceNo) existing.deviceNo = account.deviceNo;
             } else {
                 accounts.push(account);
@@ -223,25 +190,25 @@ function listAccounts() {
     return readPrefState().accounts;
 }
 
-function upsertAccount(auth, deviceNo, phone) {
+function upsertAccount(auth, deviceNo) {
     const normalizedAuth = String(auth || "").trim();
     const normalizedDeviceNo = String(deviceNo || "").trim();
     if (normalizedAuth.length < 20 || normalizedAuth.toLowerCase() === "null") return null;
+    // 账号 id 统一为 JWT 中的稳定 userId；无法解析则跳过本次采集。
+    const id = accountKey(normalizedAuth);
+    if (!id) return null;
 
-    // 手机号登录优先用手机号定位账号；URL 未携带时再从 JWT 载荷解析（兜底）。
-    const mobile = normalizePhone(phone) || extractPhoneFromJwt(normalizedAuth);
     const state = readPrefState();
-    const id = accountKey(normalizedAuth, mobile);
     let account = state.accounts.filter(function (item) { return item.id === id; })[0];
     const isNew = !account;
     if (!account) {
-        account = { id: id, auth: "", phone: "", deviceNo: "" };
+        account = { id: id, auth: "", deviceNo: "" };
         state.accounts.push(account);
     }
     // 只更新本账号的身份字段；缺少 device_no 的请求不抹掉之前捕获的值。
-    account.id = id;
+    // 记录 token 是否发生变化，供采集日志/通知标注"更新"。
+    const tokenRefreshed = !isNew && account.auth !== normalizedAuth;
     account.auth = normalizedAuth;
-    if (mobile) account.phone = mobile;
     if (normalizedDeviceNo && normalizedDeviceNo.toLowerCase() !== "null") {
         account.deviceNo = normalizedDeviceNo;
     }
@@ -251,6 +218,7 @@ function upsertAccount(auth, deviceNo, phone) {
         auth: normalizedAuth,
         deviceNo: account.deviceNo || normalizedDeviceNo,
         authChanged: isNew,
+        tokenRefreshed: tokenRefreshed,
         deviceNoChanged: !!normalizedDeviceNo
     };
 }
@@ -296,12 +264,12 @@ function notifyEnabled() {
     return value("notify") !== "0";
 }
 
-// 每条控制台日志单独输出，确保每一行都以 📱 开头。
+// 每条控制台日志单独输出，确保每一行都以 🆈🆉 开头。
 function log(message) {
     String(message === undefined || message === null ? "" : message)
         .split(/\r?\n/)
         .forEach(function (line) {
-            console.log("📱 " + line);
+            console.log("🆈🆉 " + line);
         });
 }
 
@@ -887,7 +855,7 @@ function sleep(ms) {
 // 仅持久化 Task 无法自行恢复的 Authorization 与 device_no；本阶段不读取或修改响应体。
 function captureLog(message) {
     String(message || "").split(/\r?\n/).forEach(function (line) {
-        console.log("📱 [参数采集] " + line);
+        console.log("🆈🆉 [参数采集] " + line);
     });
 }
 
@@ -906,9 +874,9 @@ function captureRequestIdentity() {
     const requestAuth = String(getHeaderIgnoreCase(requestHeaders, "authorization") || "")
         .replace(/^Bearer\s+/i, "").trim();
     const requestDeviceNo = String(getHeaderIgnoreCase(requestHeaders, "device_no") || "").trim();
-    // 手机号登录：优先从请求 URL 参数取手机号；取不到时 upsert 内再从 JWT 载荷解析（兜底）。
-    const requestPhone = extractPhoneFromUrl(currentRequest.url || currentRequest.path || "");
-    const validAuth = requestAuth.length >= 20 && requestAuth.toLowerCase() !== "null";
+    // 账号 id 统一为 JWT 中的稳定 userId；解析不出则视为无效身份。
+    const requestId = accountKey(requestAuth);
+    const validAuth = requestId !== "" && requestAuth.toLowerCase() !== "null";
     const validDeviceNo = requestDeviceNo !== "" && requestDeviceNo.toLowerCase() !== "null";
     if (!validAuth) {
         return {
@@ -918,12 +886,10 @@ function captureRequestIdentity() {
         };
     }
 
-    // accountKey 内部已统一手机号口径（URL 参数 → JWT 载荷 → token 摘要），
-    // token 刷新不会再被误判为新增账号。
     const saved = listAccounts().filter(function (account) {
-        return account.id === accountKey(requestAuth, requestPhone);
+        return account.id === requestId;
     })[0];
-    const identity = upsertAccount(requestAuth, validDeviceNo ? requestDeviceNo : "", requestPhone);
+    const identity = upsertAccount(requestAuth, validDeviceNo ? requestDeviceNo : "");
     identity.authValid = true;
     identity.deviceNoValid = validDeviceNo || !!identity.deviceNo;
     identity.authChanged = !saved;
@@ -976,27 +942,31 @@ function captureRewriteRequestHeader() {
     let identity = null;
     try {
         identity = captureRequestIdentity();
-        const request = (typeof $request !== "undefined" && $request) || {};
-        captureLog("Request Header Rewrite 已触发：" + String(request.method || "未知方法") + " " +
-            String(request.path || request.url || "未知路径"));
-        // 不把完整登录令牌写入日志或通知；用摘要区分账号。
-        captureLog("账号标识：" + (identity.id || "[未识别]") + "；Authorization 有效：" + String(identity.authValid));
-        captureLog("device_no：" + (identity.deviceNo ? truncateForNotice(identity.deviceNo, 24) : "[未捕获]"));
-        captureLog("已保存账号数：" + String(listAccounts().length));
-        if (identity.authChanged) captureLog("已新增独立账号凭据。");
-        if (identity.deviceNoChanged) captureLog("已更新当前账号的设备标识。");
+        if (!identity.authValid) {
+            captureLog("未采集到有效账号身份，已跳过。");
+        } else {
+            // 日志关键结果与通知内容保持一致，同出一份数据。
+            // 新账号→"获取"；token 刷新或 device_no 变更→"更新"（打日志+通知）；无变化→只记一行。
+            const changed = identity.authChanged || identity.tokenRefreshed || identity.deviceNoChanged;
+            if (!changed) {
+                captureLog(identity.id + " 参数无变化");
+            } else {
+                const action = identity.authChanged ? "获取" : "更新";
+                const lines = [
+                    identity.id + " 参数" + action,
+                    "auth: " + truncateForNotice(identity.auth, 48),
+                    "device_no: " + (identity.deviceNo ? truncateForNotice(identity.deviceNo, 24) : "[未捕获]"),
+                    "已记录账号: " + listAccounts().map(function (account) { return account.id; }).join(",")
+                ];
+                lines.forEach(function (line) { captureLog(line); });
 
-        if ((identity.authChanged || identity.deviceNoChanged) && notifyEnabled()) {
-            // 副标题：新账号为"{手机号} 参数获取"，已存在账号信息变更为"{手机号} 参数更新"。
-            // auth 做截断显示，避免完整令牌出现在锁屏通知中；device_no 沿用原有截断。
-            const action = identity.authChanged ? "获取" : "更新";
-            const notice = "auth: " + truncateForNotice(identity.auth, 48) +
-                "\ndevice_no: " + (identity.deviceNo ? truncateForNotice(identity.deviceNo, 24) : "[未捕获]") +
-                "\n已记录账号: " + listAccounts().map(function (account) { return account.id; }).join(",");
-            try {
-                $notify("云智手机", (identity.id || "[未识别]") + " 参数" + action, notice);
-            } catch (notifyError) {
-                captureLog("采集通知发送失败：" + String(notifyError));
+                if (notifyEnabled()) {
+                    try {
+                        $notify("云智手机", lines[0], lines.slice(1).join("\n"));
+                    } catch (notifyError) {
+                        captureLog("采集通知发送失败：" + String(notifyError));
+                    }
+                }
             }
         }
     } catch (error) {
