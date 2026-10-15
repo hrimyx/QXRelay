@@ -1,5 +1,5 @@
 /**
- * @title 云智手机
+ * @title 云智手机(已下线)
  * @desc 云智手机空间领取兑换
  *
  * @Task 0 6 * * * https://raw.githubusercontent.com/hrimyx/QXRelay/master/JS/CT/yunzhi.js, tag=云智手机, img-url=https://raw.githubusercontent.com/hrimyx/QXRelay/master/Resource/yunzhi.png, enabled=true
