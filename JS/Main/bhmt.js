@@ -107,6 +107,21 @@
         "https://www.gamer.com.tw/";
 
     // --------------------------------------------------
+    // 主站签到（新版 api 接口）
+    //
+    // www.gamer.com.tw 会被 Cloudflare 拦截，$task.fetch
+    // 过不了真人验证；改走与登录、公会同一域名
+    // api.gamer.com.tw 的新版签到接口（巴哈首页当前用的
+    // 接口，见 moontai0724/巴哈姆特簽到腳本 v6.0.3）。
+    // 令牌不再向 www 要：本站的 CSRF 是 double-submit，
+    // 随机 16 位 hex 同时放进 Cookie 与请求头即可，
+    // 先用只读的 action=2 校验，过了再 action=1 签到。
+    // --------------------------------------------------
+
+    const API_SIGN_URL =
+        "https://api.gamer.com.tw/user/v1/signin.php";
+
+    // --------------------------------------------------
     // 公会
     // --------------------------------------------------
 
@@ -960,6 +975,42 @@
     }
 
     // ==================================================
+    // 异常页标题
+    //
+    // 403 错误页的前 200 字符全是 <head> 里的 meta 标签，
+    // 看不出原因；<title> 才是关键，例如
+    // “巴哈姆特電玩資訊站 -- 系統維修中”说明整站正在维修，
+    // 与 Cookie / UA 无关，脚本改什么都没用，只能等。
+    // ==================================================
+
+    function extractErrorTitle(
+        body
+    ) {
+        if (
+            body === undefined ||
+            body === null
+        ) {
+            return "";
+        }
+
+        const match =
+            String(
+                body
+            ).match(
+                /<title[^>]*>([^<]*)<\/title>/i
+            );
+
+        if (
+            match &&
+            match[1]
+        ) {
+            return match[1].trim();
+        }
+
+        return "";
+    }
+
+    // ==================================================
     // 主站签到令牌
     //
     // 正常应为单个纯文本令牌。
@@ -1119,89 +1170,162 @@
     }
 
     // ==================================================
+    // 随机 16 位 hex（新版 api 接口的 CSRF 令牌）
+    //
+    // 与油猴版一致：优先用站方种下的 ckBahamutCsrfToken，
+    // QX 里没有，就现生成一个；Cookie 与请求头送同一个值。
+    // ==================================================
+
+    function generateRandomHex(
+        length
+    ) {
+        let hexString =
+            "";
+
+        for (
+            let index = 0;
+            index < length;
+            index += 1
+        ) {
+            hexString +=
+                Math.floor(
+                    Math.random() * 16
+                ).toString(
+                    16
+                );
+        }
+
+        return hexString;
+    }
+
+    // ==================================================
+    // multipart 请求体（只含一个 action 字段）
+    //
+    // 与油猴版用的 FormData 同格式。
+    // ==================================================
+
+    function buildMultipartAction(
+        action
+    ) {
+        const boundary =
+            "----QxFormBoundary" +
+            generateRandomHex(
+                16
+            );
+
+        const body =
+            "--" +
+            boundary +
+            "\r\n" +
+            "Content-Disposition: form-data; name=\"action\"" +
+            "\r\n" +
+            "\r\n" +
+            action +
+            "\r\n" +
+            "--" +
+            boundary +
+            "--" +
+            "\r\n";
+
+        return {
+            boundary:
+                boundary,
+
+            body:
+                body
+        };
+    }
+
+    // ==================================================
+    // CSRF 令牌错误判定
+    //
+    // 新版接口令牌被拒时回 403 / 網頁已過期 /
+    // CSRF_TOKEN_ERROR；只有这种错误才值得改走旧版 www
+    // 接口重试，未登录等其他错误走 www 也没用。
+    // ==================================================
+
+    function isCsrfTokenError(
+        error
+    ) {
+        if (!error) {
+            return false;
+        }
+
+        if (
+            error.code ===
+            "CSRF_TOKEN_ERROR"
+        ) {
+            return true;
+        }
+
+        const message =
+            getErrorMessage(
+                error
+            );
+
+        return (
+            message.includes(
+                "網頁已過期"
+            ) ||
+            message.includes(
+                "CSRF"
+            )
+        );
+    }
+
+    // ==================================================
     // 主站签到
     //
-    // 注意：
-    // 已调整到公会签到之前。
+    // 顺序：先走新版 api 接口（不碰 www，不会被 CF 拦）；
+    // 只有 api 明确报令牌错误时，才改走旧版 www 接口。
     // ==================================================
 
     async function BahamutSign() {
         log(
-            "开始获取签到令牌"
+            "开始主站签到"
         );
 
         try {
-            if (
-                !AUTH_COOKIE
+            let result;
+
+            try {
+                result =
+                    await BahamutSignApi();
+            } catch (
+                apiError
             ) {
-                throw new Error(
-                    "登录成功但未建立认证 Cookie，无法请求主站签到"
-                );
-            }
-
-            const response =
-                await httpRequest(
-                    CSRF_URL,
-                    "GET",
-                    webAuthHeaders(),
-                    undefined,
-                    WEB_USER_AGENT
-                );
-
-            const csrfStatus =
-                responseStatus(
-                    response
-                );
-
-            log(
-                "CSRF HTTP: " +
-                csrfStatus
-            );
-
-            if (
-                !response ||
-                !response.body
-            ) {
-                throw new Error(
-                    "获取签到令牌失败，响应为空"
-                );
-            }
-
-            if (
-                csrfStatus !== 200
-            ) {
-                log(
-                    "CSRF 异常响应: " +
-                    previewBody(
-                        response.body
+                if (
+                    isCsrfTokenError(
+                        apiError
                     )
-                );
+                ) {
+                    log(
+                        "新版 api 接口令牌被拒，改走旧版 www 接口"
+                    );
 
-                throw new Error(
-                    "获取签到令牌失败，HTTP " +
-                    csrfStatus
-                );
+                    try {
+                        result =
+                            await BahamutSignWww();
+                    } catch (
+                        wwwError
+                    ) {
+                        throw new Error(
+                            getErrorMessage(
+                                apiError
+                            ) +
+                            "；旧版 www 接口亦失败: " +
+                            getErrorMessage(
+                                wwwError
+                            )
+                        );
+                    }
+                } else {
+                    throw apiError;
+                }
             }
 
-            // 只有状态 200 且校验为纯文本令牌后，才算成功。
-            // 原代码只看 body 非空，403 的 HTML 错误页
-            // 也会被误报“✅获取签到令牌成功”。
-            const token =
-                extractCsrfToken(
-                    response.body
-                );
-
-            log(
-                "✅获取签到令牌成功"
-            );
-
-            const days =
-                await StartSignBahamut(
-                    token
-                );
-
             if (
-                days ===
+                result.days ===
                 "ALREADY_SIGNED"
             ) {
                 notifyMsg.push(
@@ -1210,16 +1334,13 @@
             } else {
                 notifyMsg.push(
                     "主页签到: 成功，已连续签到" +
-                    days +
+                    result.days +
                     "天"
                 );
             }
 
             await StartAdsBonus(
-                token.slice(
-                    0,
-                    16
-                ),
+                result.token,
                 "start"
             );
 
@@ -1241,6 +1362,421 @@
                 message
             );
         }
+    }
+
+    // ==================================================
+    // 主站签到（新版 api 接口）
+    //
+    // 先 action=2 只读校验：已签过直接回今日已签到，
+    // 不会重复签；未签过再 action=1 签到。
+    // 返回 { days, token }，days 为连续签到天数或
+    // "ALREADY_SIGNED"，token 为 16 位 CSRF 令牌（供广告用）。
+    // ==================================================
+
+    async function BahamutSignApi() {
+        if (
+            !AUTH_COOKIE
+        ) {
+            throw new Error(
+                "登录成功但未建立认证 Cookie，无法请求主站签到"
+            );
+        }
+
+        const token =
+            generateRandomHex(
+                16
+            );
+
+        log(
+            "主站签到：走新版 api 接口"
+        );
+
+        const checked =
+            await apiSignRequest(
+                token,
+                "2"
+            );
+
+        if (
+            checked &&
+            checked.signin
+        ) {
+            log(
+                "ℹ️今天已经签到过了"
+            );
+
+            return {
+                days:
+                    "ALREADY_SIGNED",
+
+                token:
+                    token
+            };
+        }
+
+        const signed =
+            await apiSignRequest(
+                token,
+                "1"
+            );
+
+        if (
+            signed &&
+            typeof signed.days !==
+            "undefined" &&
+            signed.days !== null
+        ) {
+            log(
+                "✅巴哈姆特签到成功，已连续签到" +
+                signed.days +
+                "天"
+            );
+
+            return {
+                days:
+                    signed.days,
+
+                token:
+                    token
+            };
+        }
+
+        throw new Error(
+            "新版 api 接口签到成功但未返回天数"
+        );
+    }
+
+    // ==================================================
+    // 从已解析的响应里取服务端 JSON 错误（如有）
+    //
+    // 有则返回带 code 的 Error，无则返回 null。
+    // ==================================================
+
+    function apiErrorFromParsed(
+        parsed
+    ) {
+        if (
+            !parsed ||
+            !parsed.error
+        ) {
+            return null;
+        }
+
+        const serverError =
+            new Error(
+                (
+                    parsed.error.message ||
+                    "未知"
+                ) +
+                (
+                    parsed.error.status
+                        ? " [" +
+                          parsed.error.status +
+                          "]"
+                        : ""
+                )
+            );
+
+        if (
+            parsed.error.status
+        ) {
+            serverError.code =
+                parsed.error.status;
+        }
+
+        return serverError;
+    }
+
+    // ==================================================
+    // 新版 api 签到单次请求
+    // ==================================================
+
+    async function apiSignRequest(
+        token,
+        action
+    ) {
+        const multipart =
+            buildMultipartAction(
+                action
+            );
+
+        const cookieParts =
+            [
+                "ckBahamutCsrfToken=" +
+                token
+            ];
+
+        if (
+            AUTH_COOKIE
+        ) {
+            cookieParts.push(
+                AUTH_COOKIE
+            );
+        }
+
+        const response =
+            await httpRequest(
+                API_SIGN_URL,
+                "POST",
+                {
+                    "Content-Type":
+                        "multipart/form-data; boundary=" +
+                        multipart.boundary,
+
+                    "X-Bahamut-Csrf-Token":
+                        token,
+
+                    "Cookie":
+                        cookieParts.join(
+                            "; "
+                        )
+                },
+                multipart.body,
+                LOGIN_USER_AGENT
+            );
+
+        const status =
+            responseStatus(
+                response
+            );
+
+        log(
+            "新版 api 签到[" +
+            action +
+            "] HTTP: " +
+            status
+        );
+
+        if (
+            !response ||
+            !response.body
+        ) {
+            throw new Error(
+                "新版 api 签到响应为空"
+            );
+        }
+
+        if (
+            status !== 200
+        ) {
+            // 先看是不是服务端回的 JSON 错误（如 401 尚未登入、
+            // 403 網頁已過期），是就直接抛服务端错误，
+            // 调用方才能按错误类型决定是否走 www 后备。
+            // 若把 JSON 错误吞成通用的 HTTP 错误，
+            // 令牌被拒就永远触发不了后备。
+            let parsedErrorBody =
+                null;
+
+            try {
+                parsedErrorBody =
+                    parseJSON(
+                        response.body
+                    );
+            } catch (
+                parseError
+            ) {
+                parsedErrorBody =
+                    null;
+            }
+
+            const serverError =
+                apiErrorFromParsed(
+                    parsedErrorBody
+                );
+
+            if (
+                serverError
+            ) {
+                throw serverError;
+            }
+
+            const errorTitle =
+                extractErrorTitle(
+                    response.body
+                );
+
+            if (
+                errorTitle
+            ) {
+                log(
+                    "新版 api 签到异常页面标题: " +
+                    errorTitle
+                );
+            }
+
+            log(
+                "新版 api 签到异常响应: " +
+                previewBody(
+                    response.body
+                )
+            );
+
+            throw new Error(
+                "新版 api 签到 HTTP " +
+                status +
+                (
+                    errorTitle
+                        ? "（" +
+                          errorTitle +
+                          "）"
+                        : ""
+                )
+            );
+        }
+
+        let body;
+
+        try {
+            body =
+                parseJSON(
+                    response.body
+                );
+        } catch (
+            error
+        ) {
+            log(
+                "新版 api 签到异常响应: " +
+                previewBody(
+                    response.body
+                )
+            );
+
+            throw new Error(
+                "新版 api 签到返回的不是 JSON: " +
+                getErrorMessage(
+                    error
+                )
+            );
+        }
+
+        const serverError =
+            apiErrorFromParsed(
+                body
+            );
+
+        if (
+            serverError
+        ) {
+            throw serverError;
+        }
+
+        return (
+            body &&
+            body.data
+        ) || {};
+    }
+
+    // ==================================================
+    // 主站签到（旧版 www 接口，仅作新版令牌被拒时的后备）
+    //
+    // 返回 { days, token }，token 为供广告用的 16 位令牌。
+    // ==================================================
+
+    async function BahamutSignWww() {
+        log(
+            "开始获取签到令牌"
+        );
+
+        if (
+            !AUTH_COOKIE
+        ) {
+            throw new Error(
+                "登录成功但未建立认证 Cookie，无法请求主站签到"
+            );
+        }
+
+        const response =
+            await httpRequest(
+                CSRF_URL,
+                "GET",
+                webAuthHeaders(),
+                undefined,
+                WEB_USER_AGENT
+            );
+
+        const csrfStatus =
+            responseStatus(
+                response
+            );
+
+        log(
+            "CSRF HTTP: " +
+            csrfStatus
+        );
+
+        if (
+            !response ||
+            !response.body
+        ) {
+            throw new Error(
+                "获取签到令牌失败，响应为空"
+            );
+        }
+
+        if (
+            csrfStatus !== 200
+        ) {
+            const errorTitle =
+                extractErrorTitle(
+                    response.body
+                );
+
+            if (
+                errorTitle
+            ) {
+                log(
+                    "CSRF 异常页面标题: " +
+                    errorTitle
+                );
+            }
+
+            log(
+                "CSRF 异常响应: " +
+                previewBody(
+                    response.body
+                )
+            );
+
+            throw new Error(
+                "获取签到令牌失败，HTTP " +
+                csrfStatus +
+                (
+                    errorTitle
+                        ? "（" +
+                          errorTitle +
+                          "）"
+                        : ""
+                )
+            );
+        }
+
+        // 只有状态 200 且校验为纯文本令牌后，才算成功。
+        // 原代码只看 body 非空，403 的 HTML 错误页
+        // 也会被误报“✅获取签到令牌成功”。
+        const token =
+            extractCsrfToken(
+                response.body
+            );
+
+        log(
+            "✅获取签到令牌成功"
+        );
+
+        const days =
+            await StartSignBahamut(
+                token
+            );
+
+        return {
+            days:
+                days,
+
+            token:
+                token.slice(
+                    0,
+                    16
+                )
+        };
     }
 
     // ==================================================
@@ -1289,6 +1825,20 @@
         if (
             signStatus !== 200
         ) {
+            const errorTitle =
+                extractErrorTitle(
+                    response.body
+                );
+
+            if (
+                errorTitle
+            ) {
+                log(
+                    "主站签到异常页面标题: " +
+                    errorTitle
+                );
+            }
+
             log(
                 "主站签到异常响应: " +
                 previewBody(
@@ -1299,7 +1849,13 @@
             throw new Error(
                 "主站签到 HTTP " +
                 signStatus +
-                "（未带登录 Cookie 或令牌无效时，本站回 HTML 错误页而非 JSON）"
+                (
+                    errorTitle
+                        ? "（" +
+                          errorTitle +
+                          "）"
+                        : "（未带登录 Cookie 或令牌无效时，本站回 HTML 错误页而非 JSON）"
+                )
             );
         }
 
