@@ -96,6 +96,16 @@
     const SIGN_URL =
         "https://www.gamer.com.tw/ajax/signin.php";
 
+    // www.gamer.com.tw 是网页端，不是 App 接口：
+    // 不能用 Bahadroid UA，也不能只靠 auto-cookie，
+    // 必须用浏览器 UA + 登录后得到的认证 Cookie，
+    // 否则本站直接回 403 HTML 错误页。
+    const WEB_USER_AGENT =
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1";
+
+    const WEB_REFERER =
+        "https://www.gamer.com.tw/";
+
     // --------------------------------------------------
     // 公会
     // --------------------------------------------------
@@ -923,6 +933,192 @@
     }
 
     // ==================================================
+    // 响应预览（只打前 200 字符，定位 403/HTML 时用）
+    // ==================================================
+
+    function previewBody(
+        body
+    ) {
+        if (
+            body === undefined ||
+            body === null
+        ) {
+            return "";
+        }
+
+        return String(
+            body
+        )
+            .replace(
+                /\s+/g,
+                " "
+            )
+            .slice(
+                0,
+                200
+            );
+    }
+
+    // ==================================================
+    // 主站签到令牌
+    //
+    // 正常应为单个纯文本令牌。
+    // 403 时本站回的是 HTML 错误页，绝不能把它当令牌
+    // 再传给 signin.php，那只会再换一个 403。
+    // ==================================================
+
+    function extractCsrfToken(
+        body
+    ) {
+        if (
+            body === undefined ||
+            body === null
+        ) {
+            throw new Error(
+                "签到令牌响应为空"
+            );
+        }
+
+        const text =
+            String(
+                body
+            ).trim();
+
+        if (!text) {
+            throw new Error(
+                "签到令牌为空"
+            );
+        }
+
+        if (
+            text.startsWith(
+                "{"
+            )
+        ) {
+            let parsed;
+
+            try {
+                parsed =
+                    JSON.parse(
+                        text
+                    );
+            } catch (
+                error
+            ) {
+                throw new Error(
+                    "签到令牌响应不是有效 JSON: " +
+                    previewBody(
+                        text
+                    )
+                );
+            }
+
+            const serverMsg =
+                parsed &&
+                parsed.error &&
+                parsed.error.message
+                    ? parsed.error.message
+                    : (
+                        parsed &&
+                        parsed.message
+                            ? parsed.message
+                            : ""
+                    );
+
+            const token =
+                parsed &&
+                (
+                    parsed.token ||
+                    parsed.csrf_token ||
+                    (
+                        parsed.data &&
+                        (
+                            parsed.data.token ||
+                            parsed.data.csrf_token
+                        )
+                    ) ||
+                    (
+                        typeof parsed.data ===
+                            "string"
+                            ? parsed.data
+                            : ""
+                    )
+                );
+
+            if (
+                token
+            ) {
+                return String(
+                    token
+                ).trim();
+            }
+
+            throw new Error(
+                "获取签到令牌失败: " +
+                (
+                    serverMsg ||
+                    previewBody(
+                        text
+                    )
+                )
+            );
+        }
+
+        if (
+            text.includes(
+                "<"
+            ) ||
+            text.includes(
+                ">"
+            ) ||
+            /\s/.test(
+                text
+            )
+        ) {
+            throw new Error(
+                "签到令牌响应不是纯文本令牌（疑似 HTML 错误页）: " +
+                previewBody(
+                    text
+                )
+            );
+        }
+
+        return text;
+    }
+
+    // ==================================================
+    // 主站请求头
+    //
+    // 关键：公会签到能成功，正是因为它显式带了
+    // AUTH_COOKIE；主站原来两步都没带，才会 403。
+    // ==================================================
+
+    function webAuthHeaders(
+        extra
+    ) {
+        const headers =
+            Object.assign(
+                {
+                    "X-Requested-With":
+                        "XMLHttpRequest",
+
+                    "Referer":
+                        WEB_REFERER
+                },
+                extra || {}
+            );
+
+        if (
+            AUTH_COOKIE
+        ) {
+            headers.Cookie =
+                AUTH_COOKIE;
+        }
+
+        return headers;
+    }
+
+    // ==================================================
     // 主站签到
     //
     // 注意：
@@ -935,20 +1131,31 @@
         );
 
         try {
+            if (
+                !AUTH_COOKIE
+            ) {
+                throw new Error(
+                    "登录成功但未建立认证 Cookie，无法请求主站签到"
+                );
+            }
+
             const response =
                 await httpRequest(
                     CSRF_URL,
                     "GET",
-                    {},
+                    webAuthHeaders(),
                     undefined,
-                    LOGIN_USER_AGENT
+                    WEB_USER_AGENT
+                );
+
+            const csrfStatus =
+                responseStatus(
+                    response
                 );
 
             log(
                 "CSRF HTTP: " +
-                responseStatus(
-                    response
-                )
+                csrfStatus
             );
 
             if (
@@ -956,20 +1163,33 @@
                 !response.body
             ) {
                 throw new Error(
-                    "获取签到令牌失败"
+                    "获取签到令牌失败，响应为空"
                 );
             }
 
-            const token =
-                String(
-                    response.body
-                ).trim();
+            if (
+                csrfStatus !== 200
+            ) {
+                log(
+                    "CSRF 异常响应: " +
+                    previewBody(
+                        response.body
+                    )
+                );
 
-            if (!token) {
                 throw new Error(
-                    "签到令牌为空"
+                    "获取签到令牌失败，HTTP " +
+                    csrfStatus
                 );
             }
+
+            // 只有状态 200 且校验为纯文本令牌后，才算成功。
+            // 原代码只看 body 非空，403 的 HTML 错误页
+            // 也会被误报“✅获取签到令牌成功”。
+            const token =
+                extractCsrfToken(
+                    response.body
+                );
 
             log(
                 "✅获取签到令牌成功"
@@ -1034,28 +1254,79 @@
             await httpRequest(
                 SIGN_URL,
                 "POST",
-                {
-                    "Content-Type":
-                        "application/x-www-form-urlencoded"
-                },
+                webAuthHeaders(
+                    {
+                        "Content-Type":
+                            "application/x-www-form-urlencoded"
+                    }
+                ),
                 "action=1&token=" +
                 encodeURIComponent(
                     token
                 ),
-                LOGIN_USER_AGENT
+                WEB_USER_AGENT
+            );
+
+        const signStatus =
+            responseStatus(
+                response
             );
 
         log(
             "主站签到 HTTP: " +
-            responseStatus(
-                response
-            )
+            signStatus
         );
 
-        const body =
-            parseJSON(
-                response.body
+        if (
+            !response ||
+            !response.body
+        ) {
+            throw new Error(
+                "主站签到响应为空"
             );
+        }
+
+        if (
+            signStatus !== 200
+        ) {
+            log(
+                "主站签到异常响应: " +
+                previewBody(
+                    response.body
+                )
+            );
+
+            throw new Error(
+                "主站签到 HTTP " +
+                signStatus +
+                "（未带登录 Cookie 或令牌无效时，本站回 HTML 错误页而非 JSON）"
+            );
+        }
+
+        let body;
+
+        try {
+            body =
+                parseJSON(
+                    response.body
+                );
+        } catch (
+            error
+        ) {
+            log(
+                "主站签到异常响应: " +
+                previewBody(
+                    response.body
+                )
+            );
+
+            throw new Error(
+                "主站签到返回的不是 JSON（疑似 HTML 错误页）: " +
+                getErrorMessage(
+                    error
+                )
+            );
+        }
 
         if (
             body &&
@@ -1121,9 +1392,18 @@
             !token ||
             token.length < 16
         ) {
-            throw new Error(
-                "广告签到 Token 无效"
+            // 原来这里 throw 会穿出 StartAdsBonus，被 BahamutSign
+            // 的 catch 当成主站签到异常，即使主站其实已签到成功。
+            // 广告失败只记广告这一项，不污染主站结果。
+            log(
+                "❌广告奖励签到失败: 广告签到 Token 无效"
             );
+
+            notifyMsg.push(
+                "广告签到: Token 无效"
+            );
+
+            return;
         }
 
         const cookieParts =
