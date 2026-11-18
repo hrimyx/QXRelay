@@ -1,21 +1,26 @@
 /**
- * @title 云智手机(已下线)
+ * @title 云智手机
  * @desc 云智手机空间领取兑换
+ * @version 1.1.2
  *
  * @Task 0 6 * * * https://raw.githubusercontent.com/hrimyx/QXRelay/master/JS/CT/yunzhi.js, tag=云智手机, img-url=https://raw.githubusercontent.com/hrimyx/QXRelay/master/Resource/yunzhi.png, enabled=true
  * @param #pollCount=xxx&pollIntervalMs=yyy&notify=zzz
  * 
  * @Rewrite ^https:\/\/yunzhi\.new-gm\.cn\/yunzhi\/api\/benefit\/lobster\/pool\/byUser(?:\?.*)?$ url script-request-header https://raw.githubusercontent.com/hrimyx/QXRelay/master/JS/CT/yunzhi.js
  * @mitm yunzhi.new-gm.cn
+ * @key Authorization device_no
  */
+
+
+
 
 
 const CONFIG = {
     // 可由 Task URL 覆盖的运行参数
     pollCount: "3",          // 状态查询最多次数（1-10）
     pollIntervalMs: "1200",  // 状态查询间隔（1-10000 毫秒）
-    notify: "1",              // 1=执行结果通知，0=仅日志
-    requestTimeoutMs: 9000,    // 单次请求等待上限
+    notify: "1",             // 1=执行结果通知，0=仅日志
+    requestTimeoutMs: 9000,  // 单次请求等待上限
 
     baseUrl: "https://yunzhi.new-gm.cn",
     paths: {
@@ -23,7 +28,8 @@ const CONFIG = {
         userList: "/yunzhi/api/benefit/user/list",
         claim: "/yunzhi/api/benefit/claim",
         status: "/yunzhi/api/benefit/claim/status",
-        benefit: "/yunzhi/api/benefit/user/benefit"
+        benefit: "/yunzhi/api/benefit/user/benefit",
+        userInfo: "/yunzhi/api/user/info"
     },
 
     // 源码中两类签名算法分别使用不同密钥，不能任意合并，否则签名会失效。
@@ -108,6 +114,27 @@ function accountKey(auth) {
     return userId ? "uid:" + userId : "";
 }
 
+function isPhoneLabel(text) {
+    // 只接受脱敏号（155****2499）或完整 11 位号；其他字符串一律不存。
+    const s = String(text || "").trim();
+    return /^\d{3}\*+\d{4}$/.test(s) || /^\d{11}$/.test(s);
+}
+
+function displayAccount(account) {
+    // Task 的账号主显示：有手机号时只显示手机号，如“155****2499”；
+    // 无手机号时只显示 uid。account 可为账号对象或 { id, phone }，
+    // 缺 phone 时按无号处理。
+    if (!account || !account.id) return "";
+    return isPhoneLabel(account.phone) ? account.phone : account.id;
+}
+
+function displayAccountFull(account) {
+    // Rewrite 采集的账号主显示：有手机号时手机号在前、uid 在后，
+    // 如“155****2499 / uid:1540939”；无手机号时只显示 uid。
+    if (!account || !account.id) return "";
+    return isPhoneLabel(account.phone) ? account.phone + " / " + account.id : account.id;
+}
+
 function cleanAccount(item) {
     if (!item || typeof item !== "object") return null;
     const auth = String(item.auth || "").trim();
@@ -116,10 +143,13 @@ function cleanAccount(item) {
     const id = accountKey(auth);
     if (!id) return null;
     const deviceNo = String(item.deviceNo || "").trim();
+    // phone 为可选标识字段（Task 调 user/info 得到），旧记录没有也不影响。
+    const phone = String(item.phone || "").trim();
     return {
         id: id,
         auth: auth,
-        deviceNo: deviceNo && deviceNo.toLowerCase() !== "null" ? deviceNo : ""
+        deviceNo: deviceNo && deviceNo.toLowerCase() !== "null" ? deviceNo : "",
+        phone: isPhoneLabel(phone) ? phone : ""
     };
 }
 
@@ -152,6 +182,7 @@ function readPrefState() {
                 // 同一账号的历史重复条目合并时，采用后出现的（更新）凭据。
                 existing.auth = account.auth;
                 if (account.deviceNo) existing.deviceNo = account.deviceNo;
+                if (account.phone) existing.phone = account.phone;
             } else {
                 accounts.push(account);
             }
@@ -175,6 +206,7 @@ function writePrefState(state) {
                 // 同一账号的历史重复条目合并时，采用后出现的（更新）凭据。
                 existing.auth = account.auth;
                 if (account.deviceNo) existing.deviceNo = account.deviceNo;
+                if (account.phone) existing.phone = account.phone;
             } else {
                 accounts.push(account);
             }
@@ -202,11 +234,11 @@ function upsertAccount(auth, deviceNo) {
     let account = state.accounts.filter(function (item) { return item.id === id; })[0];
     const isNew = !account;
     if (!account) {
-        account = { id: id, auth: "", deviceNo: "" };
+        account = { id: id, auth: "", deviceNo: "", phone: "" };
         state.accounts.push(account);
     }
     // 只更新本账号的身份字段；缺少 device_no 的请求不抹掉之前捕获的值。
-    // 记录 token 是否发生变化，供采集日志/通知标注"更新"。
+    // 记录 token 是否发生变化，供采集日志/通知标注“更新”。
     const tokenRefreshed = !isNew && account.auth !== normalizedAuth;
     account.auth = normalizedAuth;
     if (normalizedDeviceNo && normalizedDeviceNo.toLowerCase() !== "null") {
@@ -217,6 +249,7 @@ function upsertAccount(auth, deviceNo) {
         id: id,
         auth: normalizedAuth,
         deviceNo: account.deviceNo || normalizedDeviceNo,
+        phone: account.phone || "",
         authChanged: isNew,
         tokenRefreshed: tokenRefreshed,
         deviceNoChanged: !!normalizedDeviceNo
@@ -595,6 +628,21 @@ function userListHeaders() {
     };
 }
 
+function userInfoHeaders() {
+    // 与抓包中 user/info 请求一致：GET、无签名、无 body，client_type=app、
+    // channel_code=00000042，只用已捕获的 Authorization。device_no 为空，
+    // 与抓包一致，不从这里取 deviceNo。
+    requireFields(["auth"]);
+    return {
+        "Accept": "application/json, text/plain, */*",
+        "client_type": "app",
+        "authorization": value("auth").replace(/^Bearer\s+/i, ""),
+        "device_no": "",
+        "device_type": "3",
+        "channel_code": "00000042"
+    };
+}
+
 function requestJSON(path, method, headers, body) {
     const request = {
         url: CONFIG.baseUrl + path,
@@ -718,14 +766,217 @@ function extractResourceId(data) {
     return directId;
 }
 
+// -------------------------- 权益识别（1.0.3 修复区，全部账号通用） --------------------------
+// 本区不含任何账号 id、benefitConfigId、userItemId 的写死值，也不缓存
+// 上一个账号的识别结果：每次调用都用当前账号本次 user/list 的 benefits
+// 从头计算，账号之间互不影响。
+// 中断原因确认：是代码原因。旧 selectCloudBenefit 只在类型 / 名称 / 设备
+// 三路各自恰好剩 1 项时才返回，否则直接返回 null，调用方即报“无法唯一
+// 识别云机空间权益”。该报错只可能出自这一处：接口 HTTP/业务 code 失败、
+// JSON 解析失败、无权益列表、无 benefitConfigId、无可兑换 userItem、
+// 无 resourceId 各有不同的报错文案。账号 2 的 user/list 里有多条云机类
+// 权益时（例如已过期 + 未过期、体验 + 正式、或同名多配置），三路都剩
+// >1 项，即使其中只有 1 条真正可兑换，也会中断。
+// 本次改为分层收窄：每层只有唯一候选才采纳，多于 1 项则进入下一层继续
+// 收窄；全部收窄后仍 >1 项，按用户要求默认取收窄后列表的第 1 个并记
+// 日志，不再中断。selectCloudBenefit 只有在 0 个云机候选时才返回 null，
+// 此时调用方按“未找到云机权益”报错并附带全部权益摘要。
+function benefitTypeText(benefit) {
+    if (!benefit || typeof benefit !== "object") return "";
+    return String(benefit.matchType || benefit.resourceType || benefit.benefitType || benefit.type || benefit.category || "").toUpperCase();
+}
+
+function benefitNameText(benefit) {
+    if (!benefit || typeof benefit !== "object") return "";
+    return String(benefit.benefitName || benefit.name || benefit.title || "");
+}
+
+function benefitUserItems(benefit) {
+    if (!benefit || typeof benefit !== "object") return [];
+    if (Array.isArray(benefit.userItems)) return benefit.userItems;
+    if (Array.isArray(benefit.items)) return benefit.items;
+    return [];
+}
+
+function benefitCloudDevices(benefit) {
+    if (!benefit || typeof benefit !== "object") return [];
+    return Array.isArray(benefit.cloudDevices) ? benefit.cloudDevices : [];
+}
+
+function countEligibleUserItems(benefit, now) {
+    return benefitUserItems(benefit).filter(function (item) { return isEligibleUserItem(item, now); }).length;
+}
+
+function latestEligibleStartTime(benefit, now) {
+    let latest = 0;
+    benefitUserItems(benefit).forEach(function (item) {
+        if (!isEligibleUserItem(item, now)) return;
+        const startAt = parseChinaDateTime(item.startTime);
+        if (startAt !== null && startAt > latest) latest = startAt;
+    });
+    return latest;
+}
+
+function summarizeBenefit(benefit, now) {
+    if (!benefit || typeof benefit !== "object") return "结构异常";
+    const items = benefitUserItems(benefit);
+    const quota = benefit.remainingQuota;
+    return "configId=" + String(benefit.benefitConfigId === undefined ? "未返回" : benefit.benefitConfigId) +
+        "；名称=" + (benefitNameText(benefit) || "未返回") +
+        "；类型=" + (benefitTypeText(benefit) || "未返回") +
+        "；userItems=" + items.length + "（可兑换=" + countEligibleUserItems(benefit, now) + "）" +
+        "；remainingQuota=" + String(quota === undefined ? "未返回" : quota) +
+        "；cloudDevices=" + benefitCloudDevices(benefit).length;
+}
+
+function extractBenefits(data) {
+    if (Array.isArray(data)) return data;
+    if (!data || typeof data !== "object") return [];
+    if (Array.isArray(data.benefits)) return data.benefits;
+    if (Array.isArray(data.benefitList)) return data.benefitList;
+    if (Array.isArray(data.list)) return data.list;
+    if (Array.isArray(data.items)) return data.items;
+    return [];
+}
+
+function isCloudBenefit(benefit) {
+    if (!benefit || typeof benefit !== "object") return false;
+    const matchType = benefitTypeText(benefit);
+    if (matchType === "CLOUD_DEVICE" || matchType === "CLOUD_PHONE" || matchType === "CLOUD_MACHINE" || matchType === "CLOUD") return true;
+    const name = benefitNameText(benefit);
+    if (/云机空间|云机服务|云端设备|云手机空间|云智手机|云手机/.test(name)) return true;
+    const devices = benefitCloudDevices(benefit);
+    return devices.some(function (device) {
+        return device && (device.vendorResourceId || device.resourceId);
+    });
+}
+
+function selectCloudBenefit(benefits, now) {
+    if (!Array.isArray(benefits) || !benefits.length) return null;
+    const at = Number.isFinite(now) ? now : Date.now();
+    const candidates = benefits.filter(function (benefit) { return isCloudBenefit(benefit); });
+    if (candidates.length === 0) return null;
+    if (candidates.length === 1) return candidates[0];
+
+    let pool = candidates.slice();
+
+    // 1) 类型精确匹配：只有 1 条是 CLOUD_* 类型时采纳；多条则继续在其中收窄。
+    const byType = pool.filter(function (benefit) {
+        const type = benefitTypeText(benefit);
+        return type === "CLOUD_DEVICE" || type === "CLOUD_PHONE" || type === "CLOUD_MACHINE";
+    });
+    if (byType.length === 1) return byType[0];
+    if (byType.length > 1) pool = byType;
+
+    // 2) 精确名称“云机空间”（含“云机空间…”后缀变体）：只有 1 条时采纳。
+    const byExactName = pool.filter(function (benefit) {
+        const name = benefitNameText(benefit).trim();
+        return name === "云机空间" || name.indexOf("云机空间") === 0;
+    });
+    if (byExactName.length === 1) return byExactName[0];
+    if (byExactName.length > 1) pool = byExactName;
+
+    // 3) 可兑换 userItems：已过期 / 未生效的权益在此被排除。只有 1 条
+    // 剩有可兑换项时采纳——这是本案最关键的分流依据：它只排除不可兑换
+    // 的候选；若仍剩多条可兑换候选，留待后续收窄或最后默认取第 1 个。
+    const withEligible = pool.filter(function (benefit) { return countEligibleUserItems(benefit, at) > 0; });
+    if (withEligible.length === 1) return withEligible[0];
+    if (withEligible.length > 1) pool = withEligible;
+
+    // 4) remainingQuota > 0：只有 1 条有时采纳。
+    const withQuota = pool.filter(function (benefit) {
+        const quota = Number(benefit.remainingQuota);
+        return Number.isFinite(quota) && quota > 0;
+    });
+    if (withQuota.length === 1) return withQuota[0];
+    if (withQuota.length > 1) pool = withQuota;
+
+    // 5) 带有 cloudDevices：只有 1 条时采纳。
+    const withDevices = pool.filter(function (benefit) { return benefitCloudDevices(benefit).length > 0; });
+    if (withDevices.length === 1) return withDevices[0];
+    if (withDevices.length > 1) pool = withDevices;
+
+    // 6) 最新可兑换开始时间：只有 1 条拥有唯一最晚开始时间时采纳
+    // （最近一次发放的权益），并列最晚则进入默认取第 1 个。
+    let latest = 0;
+    pool.forEach(function (benefit) {
+        const startAt = latestEligibleStartTime(benefit, at);
+        if (startAt > latest) latest = startAt;
+    });
+    if (latest > 0) {
+        const newest = pool.filter(function (benefit) { return latestEligibleStartTime(benefit, at) === latest; });
+        if (newest.length === 1) return newest[0];
+        if (newest.length > 1) pool = newest;
+    }
+
+    // 全部收窄后仍有多个候选：按要求默认取第 1 个（收窄后列表首项，
+    // 即服务端返回顺序中的首个），并在日志中注明候选数与被选中的一项，
+    // 其余候选也一并记入日志，便于事后核对；不再因此中断。
+    // 带上当前账号显示（Task 规则：有手机号时只显示手机号）：
+    // 多账号运行时这行日志本身就能分清是哪个账号走了默认分支；
+    // activeAccount 为空时（单测等）不带前缀，不影响识别。
+    const accountPrefix = activeAccount && activeAccount.id ? displayAccount(activeAccount) + " " : "";
+    log(accountPrefix + "user/list 有 " + pool.length + " 个云机候选，分层收窄后仍未唯一，默认取第 1 个；选中=" + summarizeBenefit(pool[0], at) +
+        "；其余=" + pool.slice(1).map(function (benefit) { return summarizeBenefit(benefit, at); }).join(" | "));
+    return pool[0];
+}
+
+// -------------------------- 手机号标识（1.1.0 新增） --------------------------
+// 只作账号标识用，不参与领取兑换。每次 Task 对每个账号单独调一次
+// GET /yunzhi/api/user/info（实测响应 634 字节，data.phone 为脱敏号，
+// 如 155****2499；encryptedStr 不用解密，也不取完整号）。
+// 取号失败（接口报错 / 无 phone 字段 / 格式不对）一律返回空串，不抛错，
+// 调用方只记日志、继续用 uid 标识并继续兑换，绝不因此中断账号流程。
+function extractPhoneInfo(data) {
+    if (!data || typeof data !== "object") return { phone: "", userId: "" };
+    const info = data.userInfo && typeof data.userInfo === "object" ? data.userInfo : data;
+    const rawPhone = info.phone || info.mobile || data.phone || data.mobile || "";
+    const phone = isPhoneLabel(rawPhone) ? String(rawPhone).trim() : "";
+    const rawId = info.id || info.userId || data.userId || data.id || "";
+    return { phone: phone, userId: String(rawId || "").trim() };
+}
+
+function requestUserInfo() {
+    return getJSON(CONFIG.paths.userInfo, userInfoHeaders()).then(function (result) {
+        const data = result.data && typeof result.data === "object" ? result.data : {};
+        return extractPhoneInfo(data);
+    });
+}
+
+function saveAccountPhone(accountId, phone) {
+    if (!isPhoneLabel(phone)) return false;
+    try {
+        const state = readPrefState();
+        const account = state.accounts.filter(function (item) { return item.id === accountId; })[0];
+        if (!account || account.phone === phone) return !!account;
+        account.phone = phone;
+        return writePrefState(state);
+    } catch (error) {
+        return false;
+    }
+}
+
+function accountLabel(account, index, total) {
+    // Task 规则：有脱敏号时只显示手机号，如“账号 1/2 [155****2499]”；
+    // 没有时退回只有 uid 的格式，保证旧记录和取号失败的账号仍能正常显示。
+    return "账号 " + (index + 1) + "/" + total + " [" + displayAccount(account) + "]";
+}
+
 function requestUserItemId() {
     // 每次 Task 都重新读取最新 userItemId、benefitConfigId；不复用 Rewrite 保存的业务数据。
     return getJSON(CONFIG.paths.userList, userListHeaders()).then(function (result) {
+        const now = Date.now();
         const data = result.data && typeof result.data === "object" ? result.data : {};
-        const benefits = Array.isArray(data.benefits) ? data.benefits : [];
-        const targetBenefit = selectCloudBenefit(benefits);
+        const benefits = extractBenefits(data);
+        if (!benefits.length) {
+            throw new Error("user/list 未返回权益列表（data 下无 benefits/benefitList/list/items），已停止兑换。data 字段=" + Object.keys(data).join(","));
+        }
+        const targetBenefit = selectCloudBenefit(benefits, now);
         if (!targetBenefit) {
-            throw new Error("user/list 响应中无法唯一识别云机空间权益，已停止兑换以避免误选。");
+            // 能到这里只剩一种可能：0 个云机候选（多候选已默认取第 1 个，
+            // 不再报“无法唯一识别”）。如实输出该原因，附带全部权益摘要。
+            const summaries = benefits.map(function (benefit) { return summarizeBenefit(benefit, now); }).join(" | ");
+            throw new Error("user/list 中未找到云机空间权益（共 " + benefits.length + " 条权益，均不匹配云机类型/名称/设备），已停止兑换。全部权益=" + summaries);
         }
 
         const configValue = targetBenefit.benefitConfigId;
@@ -733,15 +984,15 @@ function requestUserItemId() {
             throw new Error("user/list 的云机空间权益没有返回 benefitConfigId。");
         }
         const benefitConfigId = String(configValue).trim();
-        const items = Array.isArray(targetBenefit.userItems) ? targetBenefit.userItems : [];
-        const eligible = items.filter(function (item) { return isEligibleUserItem(item, Date.now()); });
+        const items = benefitUserItems(targetBenefit);
+        const eligible = items.filter(function (item) { return isEligibleUserItem(item, now); });
         eligible.sort(function (a, b) {
             return (parseChinaDateTime(b.startTime) || 0) - (parseChinaDateTime(a.startTime) || 0);
         });
         if (!eligible.length) {
             const quota = targetBenefit.remainingQuota;
-            throw new Error("user/list 中没有未过期且已生效的 userItemId。remainingQuota=" +
-                String(quota === undefined ? "未返回" : quota));
+            throw new Error("user/list 中没有未过期且已生效的 userItemId。选中权益=" + summarizeBenefit(targetBenefit, now) +
+                "；userItems 总数=" + items.length);
         }
 
         const selected = eligible[0];
@@ -850,7 +1101,7 @@ function sleep(ms) {
     return new Promise(function (resolve) { setTimeout(resolve, ms); });
 }
 
-// -------------------------- Rewrite 参数采集区 --------------------------
+// -------------------------- Rewrite 参数采集区 —————————————
 // script-request-header 规则只匹配 /benefit/lobster/pool/byUser，从请求头采集身份信息。
 // 仅持久化 Task 无法自行恢复的 Authorization 与 device_no；本阶段不读取或修改响应体。
 function captureLog(message) {
@@ -891,44 +1142,14 @@ function captureRequestIdentity() {
     })[0];
     const identity = upsertAccount(requestAuth, validDeviceNo ? requestDeviceNo : "");
     identity.authValid = true;
+    // Rewrite 阶段拿不到手机号，沿用之前 Task 取到的（若有），供采集
+    // 日志/通知以手机号为主显示；新账号此时为空，仍显示 uid。
+    identity.phone = (saved && saved.phone) || identity.phone || "";
     identity.deviceNoValid = validDeviceNo || !!identity.deviceNo;
     identity.authChanged = !saved;
     identity.deviceNoChanged = validDeviceNo && (!saved || saved.deviceNo !== requestDeviceNo);
     return identity;
 }
-
-function isCloudBenefit(benefit) {
-    if (!benefit || typeof benefit !== "object") return false;
-    const matchType = String(benefit.matchType || benefit.resourceType || benefit.benefitType || "").toUpperCase();
-    if (matchType === "CLOUD_DEVICE" || matchType === "CLOUD_PHONE" || matchType === "CLOUD_MACHINE") return true;
-    const name = String(benefit.benefitName || benefit.name || benefit.title || "");
-    if (/云机空间|云机服务|云端设备|云手机空间/.test(name)) return true;
-    const devices = Array.isArray(benefit.cloudDevices) ? benefit.cloudDevices : [];
-    return devices.some(function (device) {
-        return device && (device.vendorResourceId || device.resourceId);
-    });
-}
-
-function selectCloudBenefit(benefits) {
-    if (!Array.isArray(benefits)) return null;
-    const cloudType = benefits.filter(function (benefit) {
-        const type = String(benefit && (benefit.matchType || benefit.resourceType || benefit.benefitType) || "").toUpperCase();
-        return type === "CLOUD_DEVICE" || type === "CLOUD_PHONE" || type === "CLOUD_MACHINE";
-    });
-    if (cloudType.length === 1) return cloudType[0];
-    const byName = benefits.filter(function (benefit) {
-        const name = String(benefit && (benefit.benefitName || benefit.name || benefit.title) || "");
-        return /云机空间|云机服务|云端设备|云手机空间/.test(name);
-    });
-    if (byName.length === 1) return byName[0];
-    const byDevice = benefits.filter(function (benefit) {
-        return isCloudBenefit(benefit);
-    });
-    if (byDevice.length === 1) return byDevice[0];
-    // 不因为“恰好只有一项有有效 userItems”就推断它是云机权益，避免误选其他权益。
-    return null;
-}
-
 
 function truncateForNotice(text, maxLength) {
     const s = String(text === undefined || text === null ? "" : text);
@@ -949,14 +1170,14 @@ function captureRewriteRequestHeader() {
             // 新账号→"获取"；token 刷新或 device_no 变更→"更新"（打日志+通知）；无变化→只记一行。
             const changed = identity.authChanged || identity.tokenRefreshed || identity.deviceNoChanged;
             if (!changed) {
-                captureLog(identity.id + " 参数无变化");
+                captureLog(displayAccountFull(identity) + " 参数无变化");
             } else {
                 const action = identity.authChanged ? "获取" : "更新";
                 const lines = [
-                    identity.id + " 参数" + action,
+                    displayAccountFull(identity) + " 参数" + action,
                     "auth: " + truncateForNotice(identity.auth, 48),
                     "device_no: " + (identity.deviceNo ? truncateForNotice(identity.deviceNo, 24) : "[未捕获]"),
-                    "已记录账号: " + listAccounts().map(function (account) { return account.id; }).join(",")
+                    "已记录账号: " + listAccounts().map(function (account) { return displayAccountFull(account); }).join(",")
                 ];
                 lines.forEach(function (line) { captureLog(line); });
 
@@ -976,7 +1197,7 @@ function captureRewriteRequestHeader() {
     $done();
 }
 
-// -------------------------- Task 任务执行区 --------------------------
+// -------------------------- Task 任务执行区 —————————————
 if (IS_REWRITE) {
     captureRewriteRequestHeader();
 } else if (typeof $task === "undefined" || !$task || typeof $task.fetch !== "function") {
@@ -1002,9 +1223,25 @@ if (IS_REWRITE) {
             let claimId = "";
             let statusSummary = "发放状态未确认";
             let expirySummary = "云机到期时间未返回";
-            const label = "账号 " + (accountIndex + 1) + "/" + accounts.length + " [" + account.id + "]";
+            let label = accountLabel(account, accountIndex, accounts.length);
 
             try {
+                // 第 0 步：取脱敏手机号作标识（Task 直接 GET user/info，
+                // 不走 Rewrite、不走 mitm 新增规则）。失败只记日志，
+                // 继续用 uid 标识并继续兑换，不中断本账号。
+                try {
+                    const info = await requestUserInfo();
+                    if (info.phone) {
+                        account.phone = info.phone;
+                        saveAccountPhone(account.id, info.phone);
+                        label = accountLabel(account, accountIndex, accounts.length);
+                    } else {
+                        log(label + " 未返回手机号，继续用 uid 标识");
+                    }
+                } catch (phoneError) {
+                    log(label + " 查询手机号失败，不影响兑换；原因=" + String(phoneError && phoneError.message ? phoneError.message : phoneError));
+                }
+
                 requireFields(["auth", "deviceNo"]);
                 log("开始处理 " + label + "：领取 → 兑换 → 查询发放状态 → 查询云机有效期");
 
@@ -1073,7 +1310,9 @@ if (IS_REWRITE) {
             } catch (error) {
                 const errorMessage = String(error && error.message ? error.message : error);
                 log(label + " 流程中断：" + step + "；原因=" + errorMessage);
-                results.push({ ok: false, label: label, message: "失败步骤：" + step + "；" + errorMessage.slice(0, 220) });
+                // 失败原因全文已记入日志；通知里也尽量保留完整原因（原 220 字符
+                // 会把“未找到权益 / 无可兑换项”等原因后的权益摘要截掉）。
+                results.push({ ok: false, label: label, message: "失败步骤：" + step + "；" + errorMessage.slice(0, 500) });
                 // 一个账号失败只记录结果，继续下一个账号。
             }
         }
