@@ -2,6 +2,7 @@
  * @title 云智手机
  * @desc 云智手机空间领取兑换
  * @version 1.1.2
+ * @author Hrimyx
  *
  * @Task 0 6 * * * https://raw.githubusercontent.com/hrimyx/QXRelay/master/JS/CT/yunzhi.js, tag=云智手机, img-url=https://raw.githubusercontent.com/hrimyx/QXRelay/master/Resource/yunzhi.png, enabled=true
  * @param #pollCount=xxx&pollIntervalMs=yyy&notify=zzz

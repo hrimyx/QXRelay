@@ -1,11 +1,16 @@
 /**
- * @fileoverview 巴哈姆特 每日签到
- * @supported Quantumult X (v1.5.6-build918+)
- *
- * https://raw.githubusercontent.com/hrimyx/QXRelay/master/JS/Main/bhmt.js#account=xxx&password=xxx&totp=xxx&ads=0&guild=1&answer=0&notify=1&force-timeout=180000
- * 必填 account 账号、password 密码
- * 选填 totp 两步验证, guild 公会签到  1, ads 广告双倍签到 0, answer 动画疯每日答题 1, notify 通知 1, force-timeout 超时 180000
+ * @title 巴哈姆特
+ * @desc 巴哈姆特每日签到、答题
+ * @version 1.0.0
+ * @author Hrimyx
+ * 
+ * @Task 0 8 * * * https://raw.githubusercontent.com/hrimyx/QXRelay/master/JS/Main/bhmt.js#account=xxx&password=xxx&totp=xxx&ads=0&guild=1&answer=0&notify=1&force-timeout=180000
+ * @param  #account=xxx&password=xxx 选填: totp 两步验证, guild 公会签到  1, ads 广告双倍签到 0, answer 动画疯每日答题 1, notify 通知 1, force-timeout 超时 180000
  */
+
+
+
+
 
 !(async () => {
 

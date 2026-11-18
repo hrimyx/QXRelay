@@ -1,6 +1,26 @@
 // 常用方法
 // 样例 https://github.com/crossutility/Quantumult-X
 
+/**
+ * @title 名称
+ * @desc 功能描述
+ * @version 1.1.2
+ * @author Hrimyx
+ * 
+ * @Task 0 8 * * * https://raw.githubusercontent.com/hrimyx/QXRelay/master/JS/Main/xxx.js
+ * @param #account=xxx&password=yyy&token=zzz
+ * 
+ * @Rewrite ^https:\/\/a\.b\.c$ url script-request-header https://raw.githubusercontent.com/hrimyx/QXRelay/master/JS/CT/yyy.js
+ * @mitm a.b.c
+ * @key abc
+ */
+!(async () => {
+    const args = $environment.variables || {};
+    console.log(JSON.stringify(args, null, 2));
+    $done();
+})();
+
+
 $prefs.setValueForKey(val, key)
 $prefs.valueForKey(key)
 $prefs.removeValueForKey(key)

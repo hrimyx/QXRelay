@@ -1,9 +1,16 @@
 /**
- * @fileoverview TestFlight 空位监测
- * @supported Quantumult X (v1.5.6-build918+)
- *
- * https://raw.githubusercontent.com/hrimyx/QXRelay/master/JS/Main/testflight.js#appkey=xxx+yyy         e.g. "VCIvwk2g+NLskzwi5";
- */
+ * @title TF车位
+ * @desc TestFlight空位监测
+ * @version 1.0.0
+ * @author Hrimyx
+ * 
+ * @Task 0 8 * * * https://raw.githubusercontent.com/hrimyx/QXRelay/master/JS/Main/testflight.js#appkey=xxx+yyy
+ * @param #appkey=xxx+yyy e.g."#appkey=VCIvwk2g+NLskzwi5";
+*/
+
+
+
+
 
 !(async () => {
     // 统一结束函数，确保 $done() 仅执行一次

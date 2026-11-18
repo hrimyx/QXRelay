@@ -1,5 +1,9 @@
 # https://github.com/KOP-XIAO/QuantumultX/blob/master/QuantumultX_Profiles.conf
 
+
+
+
+
 # Quantumult X 示例配置文件 (Sample Quantumult Configuration)
 #
 # 以 ";" 或 "#" 或 "//" 开头的行为注释行，不会被程序执行。
@@ -43,7 +47,7 @@
 # fallback_udp_policy 将应用于那些被分流规则匹配到，但其指向节点本身不支持 UDP relay (UDP 转发) 的流量。
 # fallback_udp_policy 的值应该指定为任何一个已启用 UDP relay 的代理节点标签 (tag/name)。
 # 它的默认值为 reject (拒绝)，如果你填写了任何不是有效节点标签的其他值，也会被忽略并强制回退使用 reject。
-
+#
 [general]
 # 配置文件头像图标的 URL
 ;profile_img_url =http://www.example.com/example.png
@@ -81,6 +85,10 @@ dns_exclusion_list = *.cmpassport.com, *.jegotrip.com.cn, *.icitymobile.mobi, id
 ;excluded_routes = 192.168.0.0/16, 172.16.0.0/12, 100.64.0.0/10, 10.0.0.0/8
 # 开启针对 ICMP Ping 的自动回复
 ;icmp_auto_reply = true
+
+
+
+
 
 #
 # 为获得更好的性能，将始终默认获取并使用当前网络（系统）分配的 DNS 服务器进行解析（你可以通过设置 "no-system" 来禁用此系统默认特性，但前提是你必须至少添加一个自定义 DNS 服务器，如 "server=223.5.5.5"）。
@@ -144,6 +152,10 @@ server = 119.29.29.29
 # 域名 CNAME 别名重定向
 ;alias = /example7.com/another-example.com
 
+
+
+
+
 #
 # static 策略 (静态策略) 会将流量指向你手动在候选节点列表中点选的服务器。
 # available 策略 (可用性策略) 会基于 server_check_url 的测试结果，指向候选节点列表中第一个网络连通可用的节点（当该策略被触发，并且当前使用的策略结果不可用时，会立即启动针对该策略组中所有节点的并发 URL 延迟测试。如果当时没有任何网络请求使用该策略，意味着该策略处于空闲状态，即使对应的服务器实际上已经宕机，系统也不会主动发起测试。在这种空闲情况下，你可以通过手动启动测试来更新节点状态，但这实际上毫无意义）。
@@ -173,6 +185,10 @@ server = 119.29.29.29
 # 自动选择最低延迟节点的策略组 (带容差 tolerance，以及存活检测 alive-checking)
 ;url-latency-benchmark = policy-name-9, resource-tag-regex=^sample, server-tag-regex=^example, check-interval=600, alive-checking=false, tolerance=0
 
+
+
+
+
 #
 # 参数 "tag" (标签名称) 和 "enabled" (启用状态) 是可选配置。
 # 所有类型远程资源的默认自动同步间隔 (sync interval) 均为 86400 秒 (即 24 小时)。
@@ -192,6 +208,10 @@ server = 119.29.29.29
 # 限制特定设备加载该订阅
 ;https://example.com/server.snippet, tag=Sample-03, img-url=http://example.com/icon.png, require-devices=ID1, ID2, enabled=false
 
+
+
+
+
 #
 # 参数 "tag", "force-policy" (强制指向策略) 和 "enabled" (启用状态) 是可选配置。
 # 当你在配置中加入了 force-policy 参数后，远程资源订阅中本身自带的分流策略指向将被强制忽略，而是统一使用这里指定的 force-policy 策略。
@@ -204,6 +224,10 @@ FILTER_LAN, tag=LAN, force-policy=direct, inserted-resource=true, enabled=true
 ;https://raw.githubusercontent.com/crossutility/Quantumult-X/master/filter.snippet, tag=Sample, force-policy=your-policy-name, enabled=true
 ;https://example.com/filter.snippet, tag=Sample, force-policy=your-policy-name, require-devices=ID1, ID2, enabled=true
 
+
+
+
+
 #
 # 参数 "tag" 和 "enabled" 是可选配置。
 #
@@ -211,6 +235,10 @@ FILTER_LAN, tag=LAN, force-policy=direct, inserted-resource=true, enabled=true
 # 引用远程重写 (Rewrite) 规则
 ;https://raw.githubusercontent.com/crossutility/Quantumult-X/master/sample-import-rewrite.snippet, tag=Sample, enabled=true
 ;https://example.com/rewrite.snippet, tag=Sample, require-devices=ID1, ID2, enabled=true
+
+
+
+
 
 #
 # 针对 Shadowsocks、VMess 等节点参数的详细说明：
@@ -337,6 +365,10 @@ FILTER_LAN, tag=LAN, force-policy=direct, inserted-resource=true, enabled=true
 ;anytls=example.com:443, password=pwd, over-tls=true, tls-host=apple.com, udp-relay=true, tag=anytls-standard-tls-01
 ;anytls=example.com:443, password=pwd, over-tls=true, tls-host=apple.com, reality-base64-pubkey=k4Uxez0sjl8bKaZH2Vgi8-WDFshML51QkxKFLWFIONk, reality-hex-shortid=0123456789abcdef, udp-relay=true, tag=anytls-reality-tls-01
 
+
+
+
+
 [filter_local]
 # 本地分流规则部分：
 ;user-agent, ?abc*, proxy
@@ -363,6 +395,9 @@ FILTER_LAN, tag=LAN, force-policy=direct, inserted-resource=true, enabled=true
 ;host-keyword, ., proxy
 # 最终的兜底规则：不满足上述任何条件的一律走 proxy 代理
 final, proxy
+
+
+
 
 
 #
@@ -414,6 +449,9 @@ final, proxy
 ;^http://example\.com/resource1/1/ ^POST url-and-header reject
 
 
+
+
+
 #
 # 如果配置声明了 require-devices，仅当目前运行该配置文件的设备 ID 列在 require-devices 名单内，下面的这行配置才会被执行并载入内存。
 # （再强调一次，Quantumult 设备 ID 查询路径位于 App 内部："Settings - Misc Settings - About"）
@@ -442,6 +480,9 @@ final, proxy
 ;* * * * * https://example.com/sample.js#this-is-not-sent-to-server&key1=value1&key2=value2, tag=Sample, enabled=true
 
 
+
+
+
 #
 # HTTP Backend 模块允许在 App 内部署一个迷你的本地 HTTP 托管服务器，并使用 JavaScript 进行数据拦截与中转运算处理。
 # 如果声明了 require-devices，只有特定设备 ID 才允许装载该挂载。
@@ -456,6 +497,9 @@ final, proxy
 ;preference.js, tag=userPreference, path=^/preference/v1/, img-url=https://example.com, enabled=true
 ;sample.js, tag=sample, path=^/sample/v1/, require-devices=ID1, ID2, enabled=true
 ;convert.js, tag=fileConverter, path=^/convert/v1/
+
+
+
 
 
 #

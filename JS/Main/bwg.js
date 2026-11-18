@@ -1,9 +1,15 @@
 /**
- * @fileoverview 搬瓦工每日流量
- * @supported Quantumult X (v1.5.6-build918+)
- *
- * https://raw.githubusercontent.com/hrimyx/QXRelay/master/JS/Main/bwg.js#veid=xxx&key=xxx
+ * @title 搬瓦工用量
+ * @desc 搬瓦工每日用量
+ * @version 1.0.0
+ * @author Hrimyx
+ * 
+ * @Task 0 8 * * * https://raw.githubusercontent.com/hrimyx/QXRelay/master/JS/Main/bwg.js#veid=xxx&key=xxx
+ * @param #veid=xxx&key=xxx
  */
+
+
+
 
 
 !(async function () {
