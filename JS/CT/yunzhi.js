@@ -1,7 +1,7 @@
 /**
  * @title 云智手机
  * @desc 云智手机空间领取兑换
- * @version 1.1.2
+ * @version 1.2.1
  * @author Hrimyx
  *
  * @Task 0 6 * * * https://raw.githubusercontent.com/hrimyx/QXRelay/master/JS/CT/yunzhi.js, tag=云智手机, img-url=https://raw.githubusercontent.com/hrimyx/QXRelay/master/Resource/yunzhi.png, enabled=true
@@ -22,6 +22,9 @@ const CONFIG = {
     pollIntervalMs: "1200",  // 状态查询间隔（1-10000 毫秒）
     notify: "1",             // 1=执行结果通知，0=仅日志
     requestTimeoutMs: 9000,  // 单次请求等待上限
+    userListInitialDelayMs: 500,      // 领取后等多久再首次查 user/list，给服务端留出生成当日权益的时间
+    userListRetryDelaysMs: [600, 600],  // 首次取到空权益列表后的重试间隔（共再试 2 次）
+    accountGapMs: 200,       // 两个账号之间的间隔，避免请求过密
 
     baseUrl: "https://yunzhi.new-gm.cn",
     paths: {
@@ -837,7 +840,37 @@ function extractBenefits(data) {
     if (Array.isArray(data.benefitList)) return data.benefitList;
     if (Array.isArray(data.list)) return data.list;
     if (Array.isArray(data.items)) return data.items;
+    // 兜底：benefits 为对象时，取其内嵌数组，或按 id 键展开为数组。
+    const nested = data.benefits && typeof data.benefits === "object" ? data.benefits : null;
+    if (nested) {
+        if (Array.isArray(nested.list)) return nested.list;
+        if (Array.isArray(nested.items)) return nested.items;
+        if (Array.isArray(nested.data)) return nested.data;
+        if (Array.isArray(nested.benefits)) return nested.benefits;
+        const values = Object.keys(nested).map(function (key) { return nested[key]; })
+            .filter(function (value) { return value && typeof value === "object"; });
+        if (values.length) return values;
+    }
+    const inner = data.data && typeof data.data === "object" ? data.data : null;
+    if (inner && Array.isArray(inner.benefits)) return inner.benefits;
     return [];
+}
+
+function describeBenefitsField(data) {
+    // 如实描述 benefits 字段，供报错区分“缺失 / null / 空数组 / 类型异常”。
+    // 只取类型、长度、键名，不输出完整响应体，避免日志过长。
+    if (!data || typeof data !== "object") return "data 不是对象";
+    const keys = ["benefits", "benefitList", "list", "items"];
+    for (let i = 0; i < keys.length; i++) {
+        const key = keys[i];
+        if (!(key in data)) continue;
+        const value = data[key];
+        if (value === null) return key + "=null";
+        if (Array.isArray(value)) return key + " 为数组，长度=" + value.length;
+        if (typeof value === "object") return key + " 为对象，键=" + Object.keys(value).join(",");
+        return key + " 类型=" + typeof value + "，值=" + String(value).slice(0, 80);
+    }
+    return "无 benefits/benefitList/list/items 字段";
 }
 
 function isCloudBenefit(benefit) {
@@ -963,14 +996,37 @@ function accountLabel(account, index, total) {
     return "账号 " + (index + 1) + "/" + total + " [" + displayAccount(account) + "]";
 }
 
-function requestUserItemId() {
+async function requestUserItemId() {
     // 每次 Task 都重新读取最新 userItemId、benefitConfigId；不复用 Rewrite 保存的业务数据。
-    return getJSON(CONFIG.paths.userList, userListHeaders()).then(function (result) {
+    // 1.2.0：领取后先等一会儿再查 user/list；取到空权益列表时重试，
+    // 而不是立刻中断——实跑显示领取→user/list 间隔 54~55ms 时失败、
+    // 119~149ms 时成功，疑似服务端尚未生成/同步出当日权益。
+    await sleep(CONFIG.userListInitialDelayMs);
+    const retryDelays = CONFIG.userListRetryDelaysMs;
+    const accountPrefix = activeAccount && activeAccount.id ? displayAccount(activeAccount) + " " : "";
+    let lastEmptyError = null;
+    for (let attempt = 0; attempt <= retryDelays.length; attempt++) {
+        const result = await getJSON(CONFIG.paths.userList, userListHeaders());
         const now = Date.now();
         const data = result.data && typeof result.data === "object" ? result.data : {};
         const benefits = extractBenefits(data);
         if (!benefits.length) {
-            throw new Error("user/list 未返回权益列表（data 下无 benefits/benefitList/list/items），已停止兑换。data 字段=" + Object.keys(data).join(","));
+            // 2026-11-19 实跑教训：旧文案一律写“未返回权益列表”，但账号 1
+            // 当时 data 字段里明明有 benefits。三种情况必须分开说，否则
+            // 下次还是无法判断是服务端没给、给了空列表、还是结构变了。
+            const fieldDesc = describeBenefitsField(data);
+            const memberDesc = "memberStatus=" + String(data.memberStatus === undefined ? "未返回" : data.memberStatus) +
+                "；memberExpireTime=" + String(data.memberExpireTime || "未返回");
+            lastEmptyError = new Error("user/list 中没有可解析的权益列表，已停止兑换。" + fieldDesc +
+                "；" + memberDesc + "；data 字段=" + Object.keys(data).join(",") +
+                "；已尝试 " + (attempt + 1) + "/" + (retryDelays.length + 1) + " 次");
+            if (attempt < retryDelays.length) {
+                log(accountPrefix + "user/list 第 " + (attempt + 1) + " 次取到空权益列表（" + fieldDesc + "），等待 " +
+                    retryDelays[attempt] + "ms 后重试");
+                await sleep(retryDelays[attempt]);
+                continue;
+            }
+            throw lastEmptyError;
         }
         const targetBenefit = selectCloudBenefit(benefits, now);
         if (!targetBenefit) {
@@ -1024,7 +1080,8 @@ function requestUserItemId() {
                 benefitName + "；开始=" + resultItem.startTime + "；记录到期=" + resultItem.expireTime;
             return resultItem;
         });
-    });
+    }
+    throw lastEmptyError || new Error("user/list 重试后仍未返回权益列表，已停止兑换。");
 }
 
 function requestPopup() {
@@ -1220,6 +1277,10 @@ if (IS_REWRITE) {
         for (let accountIndex = 0; accountIndex < accounts.length; accountIndex++) {
             const account = accounts[accountIndex];
             activeAccount = account;
+            // 1.2.0：账号之间留间隔，避免 14 个请求在约 1.3 秒内打完。
+            // 原间隔只有约 37~39ms，成功与失败两种情况都有，所以它单独
+            // 解释不了翻转；这里只是配合领取后等待一起降低突发密度。
+            if (accountIndex > 0) await sleep(CONFIG.accountGapMs);
             let step = "参数校验";
             let claimId = "";
             let statusSummary = "发放状态未确认";
